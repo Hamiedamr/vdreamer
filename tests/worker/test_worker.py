@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 import _kit
@@ -140,19 +140,6 @@ class _LeaseLostQueue(InMemoryRunQueue):
     async def heartbeat(self, run_id: str) -> bool:
         self.beats += 1
         return self.beats <= self._GRACE_BEATS
-
-
-class _ResumableQueue(InMemoryRunQueue):
-    """Stand-in for the M4 resolve endpoint: plants the resume input on the row.
-
-    PRD §4.3: the gateway builds ``Command(resume=...)`` from the resolution
-    and requeues the run. WP1's queue has no input-update surface yet, so the
-    test supplies it here — the worker itself just drives the row's input.
-    """
-
-    async def update_input(self, run_id: str, input: Any) -> None:
-        async with self._lock:
-            self._runs[run_id] = replace(self._runs[run_id], input=input)
 
 
 class _ObservedSink(InMemoryEventSink):
@@ -296,7 +283,7 @@ async def test_worker_binds_the_run_context_and_idempotency_key() -> None:
 
 async def test_approval_suspends_then_resume_requeues_with_the_resume_input() -> None:
     agent = _kit.ApprovalAgent()
-    harness = make_worker(agent, _ResumableQueue())
+    harness = make_worker(agent)
     record = await harness.queue.enqueue(
         agent.name, _kit.input_for(agent), thread_id="t1", run_id=None
     )
@@ -317,10 +304,12 @@ async def test_approval_suspends_then_resume_requeues_with_the_resume_input() ->
     # The thread is still occupied, but nothing is claimed or leased.
     assert await harness.queue.claim("w2") is None
 
-    # Resolution (the gateway's job, M4): plant Command(resume=...) on the
-    # row, then resume → queued → the next claim re-drives from the checkpoint.
-    await harness.queue.update_input(record.id, Command(resume={"action": "approve"}))
-    await harness.queue.resume(record.id)
+    # Resolution (the gateway's job, M4): plant the resume map {interrupt_id:
+    # value} on the row while resuming it → queued → the next claim turns the
+    # map into Command(resume=...) against the checkpoint.
+    (requested,) = [e for e in sink.events if e.type.value == "interrupt.requested"]
+    interrupt_id = requested.payload["interrupt_id"]
+    await harness.queue.resume(record.id, resume={interrupt_id: {"action": "approve"}})
     assert await harness.worker.run_once() is True
     final = await harness.queue.get(record.id)
     assert final is not None
@@ -663,3 +652,112 @@ async def test_sigterm_install_noops_on_windows() -> None:
     harness.worker._install_sigterm()
     assert harness.worker._sigterm_installed is False
     assert signal.getsignal(signal.SIGTERM) is previous
+
+
+# ---------------------------------------------------------------------------
+# Milestone 4: the gateway contract
+# ---------------------------------------------------------------------------
+
+
+async def test_gateway_cancel_is_noticed_by_the_heartbeat() -> None:
+    """``POST /runs/{id}/cancel`` marks the row from another process; the worker's
+    heartbeat notices, drains with ``"cancelled"``, and writes the final event."""
+    gate = asyncio.Event()
+    release = asyncio.Event()  # stays closed: the node ticks until drained
+    agent = GatedAgent(gate, release)
+    harness = make_worker(agent, trigger=_progress("second-started"), lease_interval_s=0.05)
+    record = await harness.queue.enqueue(
+        agent.name, _kit.input_for(agent), thread_id="t-gw-cancel", run_id=None
+    )
+    task = asyncio.create_task(harness.worker.run_once())
+    sink = await _observed(harness, record.id)
+    await asyncio.wait_for(sink.seen.wait(), 5.0)
+
+    assert await harness.queue.cancel(record.id) is RunState.RUNNING  # the gateway's call
+    gate.set()
+    assert await asyncio.wait_for(task, 5.0) is True
+
+    final = await harness.queue.get(record.id)
+    assert final is not None and final.status is RunState.CANCELLED
+    statuses = [payload["status"] for payload in _status_payloads(sink)]
+    assert statuses == ["running", "cancelled"], "the worker still authored the last word"
+    assert "second-done" not in _labels(sink)
+
+
+async def test_claims_are_restricted_to_the_workers_agent() -> None:
+    agent = _kit.ChattyAgent()
+    harness = make_worker(agent)
+    other = await harness.queue.enqueue("someone-else", {}, thread_id="t-other", run_id=None)
+    assert await harness.worker.run_once() is False  # nothing of ours to claim
+    mine = await harness.queue.enqueue(
+        agent.name, _kit.input_for(agent), thread_id="t-mine", run_id=None
+    )
+    assert await harness.worker.run_once() is True
+    assert (await harness.queue.get(mine.id)).status is RunState.COMPLETED  # type: ignore[union-attr]
+    assert (await harness.queue.get(other.id)).status is RunState.QUEUED  # type: ignore[union-attr]
+
+
+async def test_worker_binds_initiator_identity_and_client_config() -> None:
+    seen: dict[str, Any] = {}
+
+    class _Probe(_kit.BaseTestAgent):
+        name = "probe"
+
+        def build(self, ctx: Any) -> Any:
+            from langgraph.config import get_config
+
+            def node(state: _kit.ChatState) -> dict[str, Any]:
+                seen["ctx"] = current_context()
+                seen["config"] = get_config()
+                return {"flag": "ok"}
+
+            graph = _kit.StateGraph(_kit.ChatState)
+            graph.add_node("node", node)
+            graph.add_edge(_kit.START, "node")
+            graph.add_edge("node", _kit.END)
+            return graph
+
+    agent = _Probe()
+    harness = make_worker(agent)
+    record = await harness.queue.enqueue(
+        agent.name,
+        _kit.input_for(agent),
+        thread_id="t-id",
+        run_id=None,
+        user_id="alice",
+        roles=("analyst", "dba"),
+        config={
+            "configurable": {"model": "small", "thread_id": "hijack", "__pregel_x": 1},
+            "recursion_limit": 7,
+        },
+    )
+    assert await harness.worker.run_once() is True
+    ctx = seen["ctx"]
+    assert (ctx.user_id, ctx.roles) == ("alice", ("analyst", "dba"))
+    configurable = seen["config"]["configurable"]
+    assert configurable["model"] == "small"
+    assert configurable["thread_id"] == "t-id", "reserved keys never come from the client"
+    assert configurable["vdreamer_run_id"] == record.id
+    assert configurable.get("__pregel_x") is None, "LangGraph-internal keys are reserved"
+    assert seen["config"]["recursion_limit"] == 7
+
+
+async def test_interrupt_requests_become_records() -> None:
+    from vdreamer.interrupts import InMemoryInterruptStore, InterruptStatus
+
+    store = InMemoryInterruptStore()
+    agent = _kit.ApprovalAgent()
+    harness = make_worker(agent, interrupt_store=store)
+    record = await harness.queue.enqueue(
+        agent.name, _kit.input_for(agent), thread_id="t-int", run_id=None, user_id="alice"
+    )
+    assert await harness.worker.run_once() is True
+    (created,) = await store.list(status=InterruptStatus.PENDING)
+    assert created.run_id == record.id and created.thread_id == "t-int"
+    assert created.agent == agent.name and created.initiator_id == "alice"
+    assert (created.kind, created.approver_role, created.scope) == ("sql_review", "dba", "db:write")
+    assert created.actions == ("approve", "reject", "edit")
+    assert created.expires_at is not None and created.version == 1
+    sink = await _observed(harness, record.id)
+    (requested,) = [e for e in sink.events if e.type.value == "interrupt.requested"]
+    assert requested.payload["interrupt_id"] == created.interrupt_id

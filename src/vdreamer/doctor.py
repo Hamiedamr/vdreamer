@@ -6,6 +6,11 @@ a socket-level egress guard, and assert nothing tried to reach the network.
 The VM network policy is the authoritative control (A40); this guard is
 defense in depth and the thing this command asserts against. Backend,
 model-file, MCP-server, and sandbox probes land with their milestones.
+
+Milestone 4 adds the gateway stack (FastAPI, uvicorn, prometheus-client) to
+the guarded imports and the vendored-asset check (§5.2, A13): every file
+under ``static/vendor/`` must match its pinned sha256 and the docs shell must
+reference no external origin (``vdreamer.vendored``).
 """
 
 from __future__ import annotations
@@ -32,6 +37,8 @@ VERSION_PACKAGES: tuple[str, ...] = (
     "langgraph",
     "langgraph-checkpoint",
     "langgraph-checkpoint-postgres",
+    "fastapi",
+    "uvicorn",
 )
 
 
@@ -111,6 +118,9 @@ def run_offline() -> int:
         import langchain  # noqa: F401 — imported under the guard on purpose
         import langgraph  # noqa: F401
         import langgraph.checkpoint.postgres  # noqa: F401
+        import uvicorn  # noqa: F401
+
+        import vdreamer.gateway  # noqa: F401 — FastAPI app factory + routes
     except Exception as exc:
         problems.append(f"stack import failed: {type(exc).__name__}: {exc}")
     finally:
@@ -128,6 +138,18 @@ def run_offline() -> int:
         print(f"[FAIL] egress: {len(guard.violations)} blocked socket call(s)")
     else:
         print("[ok] egress: zero outbound socket calls during the probe")
+
+    from vdreamer.vendored import VENDORED_ASSETS, check_vendored_assets
+
+    asset_problems = check_vendored_assets()
+    if asset_problems:
+        problems.extend(asset_problems)
+        print(f"[FAIL] vendored assets: {len(asset_problems)} problem(s)")
+    else:
+        print(
+            f"[ok] vendored assets: {len(VENDORED_ASSETS)} file(s) match their sha256; "
+            "the docs shell references no external origin"
+        )
 
     if problems:
         for problem in problems:

@@ -42,6 +42,26 @@ the worker reads that terminal status back from the sink and calls
 enqueues a resume (the gateway plants the ``Command(resume=...)`` input on
 the row, M4/M5).
 
+Milestone 4 (the gateway contract) adds four things the worker owns:
+
+- **Input selection** (:meth:`Worker._graph_input`): the gateway's interrupt
+  resolution plants a resume map ``{interrupt_id: value}`` on the row and
+  requeues it; the worker turns the entries the checkpoint still awaits into
+  ``Command(resume=...)``. A row whose thread's latest checkpoint was written by
+  *this* run (``RUN_ID_CONFIGURABLE_KEY`` in the checkpoint metadata) with
+  nodes still to run — a recovered or released run — resumes from that
+  checkpoint with ``None``; anything else drives the row's original input.
+- **Gateway cancel** — ``POST /runs/{id}/cancel`` marks the row (the gateway
+  is another process); the heartbeat notices, reads the row back, and drains
+  the run with reason ``"cancelled"``: the worker still authors the final
+  ``cancelled`` envelope, but leaves the already-final row alone.
+- **Interrupt records** — every ``interrupt.requested`` envelope also becomes
+  an :class:`~vdreamer.interrupts.InterruptRecord` (idempotent) for the
+  gateway's inbox, when an ``interrupt_store`` is wired.
+- **Identity and metrics** — the row's initiator (``user_id``/``roles``) is
+  bound into the run's ``VDreamerContext``; each settled attempt is observed in
+  ``vdreamer_run_duration_seconds``.
+
 Node failures map through the driver's failure path: a node raising
 :class:`NodeTimeoutError` / :class:`NodeError` (PRD §2.4 — developer-owned
 ``add_node(timeout=…, error_handler=…)``) reaches the worker as any other
@@ -59,13 +79,19 @@ import logging
 import signal
 import sys
 import threading
+import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
+from langgraph.types import Command
+
+from vdreamer import metrics
 from vdreamer.context import VDreamerContext
 from vdreamer.eventlog import EventSink, InMemoryEventSink
 from vdreamer.events import ErrorInfo, EventEnvelope, EventType, RunStatusPayload
+from vdreamer.interrupts import InterruptStore, record_from_event
 from vdreamer.queue import (
     LEASE_INTERVAL_S,
     InvalidTransition,
@@ -73,7 +99,7 @@ from vdreamer.queue import (
     RunRecord,
     RunState,
 )
-from vdreamer.runtime import AgentRunner
+from vdreamer.runtime import RUN_ID_CONFIGURABLE_KEY, AgentRunner, is_reserved_configurable_key
 
 _log = logging.getLogger(__name__)
 
@@ -178,9 +204,15 @@ class _RunSink(EventSink):
     run's ``seq`` when it emits an envelope of its own.
     """
 
-    def __init__(self, inner: EventSink, control: RunControl) -> None:
+    def __init__(
+        self,
+        inner: EventSink,
+        control: RunControl,
+        on_interrupt: Callable[[EventEnvelope], Awaitable[None]] | None = None,
+    ) -> None:
         self._inner = inner
         self._control = control
+        self._on_interrupt = on_interrupt
         self.last_seq = 0
         self.last_status: str | None = None
 
@@ -195,6 +227,10 @@ class _RunSink(EventSink):
         self.last_seq = max(self.last_seq, envelope.seq)
         if envelope.type is EventType.RUN_STATUS:
             self.last_status = str(envelope.payload.get("status"))
+        elif envelope.type is EventType.INTERRUPT_REQUESTED and self._on_interrupt is not None:
+            # The record first, then the event: a client reacting to
+            # ``interrupt.requested`` must find the record in the inbox (§4.2).
+            await self._on_interrupt(envelope)
         await self._inner.write(envelope)
 
     async def write_terminal(self, envelope: EventEnvelope) -> None:
@@ -244,6 +280,7 @@ class Worker:
         lease_interval_s: float = LEASE_INTERVAL_S,
         poll_interval_s: float = 0.1,
         recover_on_start: bool = True,
+        interrupt_store: InterruptStore | None = None,
     ) -> None:
         """Wire the loop.
 
@@ -270,6 +307,8 @@ class Worker:
                 await — so ``recover_on_start`` schedules it for the first
                 :meth:`run_once` / :meth:`run`; call :meth:`recover` directly
                 to run (or re-run) it explicitly.
+            interrupt_store: where ``interrupt.requested`` envelopes become
+                §4.2 records for the gateway's inbox; ``None`` keeps none.
         """
         self._runner = runner
         self._queue = queue
@@ -280,6 +319,7 @@ class Worker:
         self._lease_interval_s = lease_interval_s
         self._poll_interval_s = poll_interval_s
         self._recover_on_start = recover_on_start
+        self._interrupt_store = interrupt_store
         self._recovered = False
         #: The locally active runs' drain controls (``run_id → RunControl``);
         #: popped when the run settles. ``request_cancel`` and the SIGTERM
@@ -301,7 +341,7 @@ class Worker:
         """
         if self._recover_on_start and not self._recovered:
             await self.recover()
-        record = await self._queue.claim(self._claimant)
+        record = await self._queue.claim(self._claimant, agent=self._agent_name)
         if record is None:
             await asyncio.sleep(self._poll_interval_s)
             return False
@@ -334,15 +374,16 @@ class Worker:
         :meth:`run_once` driving it finishes the row ``cancelled``. A run not
         active here belongs to another worker (or is still queued) — fall back
         to :meth:`~vdreamer.queue.RunQueue.cancel`, which marks the row; the
-        owning worker's next heartbeat then fails and it drains with
-        ``lease_lost``, marking nothing. ``False`` when the run is neither
-        active here nor cancellable (terminal or unknown).
+        owning worker's next heartbeat then fails, reads the row back, and
+        drains with ``"cancelled"`` (see :meth:`_heartbeat_loop`). ``False``
+        when the run is neither active here nor cancellable (terminal or
+        unknown).
         """
         control = self._active.get(run_id)
         if control is not None:
             control.request_drain("cancel")
             return True
-        return await self._queue.cancel(run_id)
+        return await self._queue.cancel(run_id) is not None
 
     def drain_all(self, reason: str = "sigterm") -> None:
         """Request a drain on every locally active run.
@@ -378,14 +419,22 @@ class Worker:
         """One claimed run, end to end: heartbeat, stream, settle the row."""
         control = RunControl()
         self._active[record.id] = control
-        sink = _RunSink(await self._open_sink(record.id), control)
+        started = time.monotonic()
+        on_interrupt: Callable[[EventEnvelope], Awaitable[None]] | None = None
+        if self._interrupt_store is not None:
+
+            async def on_interrupt(envelope: EventEnvelope) -> None:
+                await self._record_interrupt(record, envelope)
+
+        sink = _RunSink(await self._open_sink(record.id), control, on_interrupt=on_interrupt)
         heartbeat = asyncio.create_task(self._heartbeat_loop(record.id, control))
         try:
             if control.drain_requested:  # a drain landed before the run started
                 raise RunDrained(control.reason or "cancel")
+            config = self._config_for(record)
             await self._runner.arun(
-                record.input,
-                config={"configurable": {"thread_id": record.thread_id or record.id}},
+                await self._graph_input(record, config),
+                config=config,
                 context=self._context_for(record),
                 sink=sink,
             )
@@ -401,15 +450,83 @@ class Worker:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
             await sink.close()
+            metrics.RUN_DURATION.labels(
+                agent=self._agent_name, status=sink.last_status or "unknown"
+            ).observe(time.monotonic() - started)
         return True
+
+    def _config_for(self, record: RunRecord) -> RunnableConfig:
+        """The run's LangGraph config: the client's ``config`` plus the addressing.
+
+        The client's ``configurable`` entries (validated by the gateway, §2.5)
+        are kept except the reserved keys; ``thread_id`` keys the checkpointer
+        and :data:`~vdreamer.runtime.RUN_ID_CONFIGURABLE_KEY` stamps every
+        checkpoint with this run (see :meth:`_graph_input`).
+        """
+        client = dict(record.config or {})
+        configurable = {
+            str(key): value
+            for key, value in dict(client.get("configurable") or {}).items()
+            if not is_reserved_configurable_key(str(key))
+        }
+        configurable["thread_id"] = record.thread_id or record.id
+        configurable[RUN_ID_CONFIGURABLE_KEY] = record.id
+        config: RunnableConfig = {"configurable": configurable}
+        recursion_limit = client.get("recursion_limit")
+        if isinstance(recursion_limit, int) and not isinstance(recursion_limit, bool):
+            config["recursion_limit"] = recursion_limit
+        return config
+
+    async def _graph_input(self, record: RunRecord, config: RunnableConfig) -> Any:
+        """What this attempt feeds the graph (§3.2, §4.3).
+
+        In order:
+
+        1. the row's resume map, narrowed to the interrupts the checkpoint
+           still awaits → ``Command(resume={interrupt_id: value})`` (an
+           approval resume — "resolution enqueues a resume", §3.2);
+        2. a checkpoint written by this very run with nodes left to run → the
+           ``None`` input, i.e. resume from the checkpoint (a recovered or
+           released attempt: the in-flight node re-executes, A6; a pending
+           interrupt with no resolution yet simply re-suspends);
+        3. otherwise the row's original input (a fresh run).
+
+        Without a checkpointer there is nothing to resume, and a state read
+        that fails falls back to the input — the M3 behaviour.
+        """
+        if not self._runner.has_checkpointer:
+            return record.input
+        try:
+            state = await self._runner.aget_state(config)
+        except Exception as error:  # pragma: no cover - defensive: unreadable state
+            _log.warning("run %s: state read failed (%s); driving the input", record.id, error)
+            return record.input
+        pending = {str(getattr(item, "id", "")) for item in (state.interrupts or ())}
+        if isinstance(record.resume, Mapping):
+            matched = {key: value for key, value in record.resume.items() if key in pending}
+            if matched:
+                return Command(resume=matched)
+        metadata = state.metadata or {}
+        if state.next and metadata.get(RUN_ID_CONFIGURABLE_KEY) == record.id:
+            return None
+        return record.input
+
+    async def _record_interrupt(self, record: RunRecord, envelope: EventEnvelope) -> None:
+        """Persist the §4.2 record for one ``interrupt.requested`` envelope."""
+        assert self._interrupt_store is not None  # wired only with a store
+        await self._interrupt_store.create(
+            record_from_event(envelope, initiator_id=record.user_id)
+        )
 
     async def _heartbeat_loop(self, run_id: str, control: RunControl) -> None:
         """Extend the lease every half window; a lost lease drains the run.
 
         ``heartbeat`` returning ``False`` (or raising — a queue outage must
-        not run blind) means the row is gone or no longer ours: cancel or the
-        recovery sweep took it. The run drains with ``lease_lost`` and the
-        worker marks nothing.
+        not run blind) means the row is gone or no longer ours. A row the
+        gateway cancelled (``POST /runs/{id}/cancel``, M4) drains with
+        ``"cancelled"`` — the worker still owes the run's final event; any
+        other loss (the recovery sweep took it) drains with ``lease_lost`` and
+        the worker marks nothing.
         """
         interval = self._lease_interval_s / 2
         while True:
@@ -420,8 +537,18 @@ class Worker:
                 _log.warning("run %s: heartbeat failed (%s) — draining", run_id, error)
                 alive = False
             if not alive:
-                control.request_drain("lease_lost")
+                control.request_drain(await self._lost_lease_reason(run_id))
                 return
+
+    async def _lost_lease_reason(self, run_id: str) -> str:
+        """``"cancelled"`` when the row was cancelled under us, else ``"lease_lost"``."""
+        try:
+            current = await self._queue.get(run_id)
+        except Exception:  # the queue is unreachable: nothing to learn
+            return "lease_lost"
+        if current is not None and current.status is RunState.CANCELLED:
+            return "cancelled"
+        return "lease_lost"
 
     async def _finish_terminal(self, record: RunRecord, sink: _RunSink) -> None:
         """Settle a run whose stream ended normally (the driver's terminal status)."""
@@ -450,6 +577,10 @@ class Worker:
             # authors the final ``run.status`` the SSE log should end on.
             await sink.write_terminal(self._status_envelope(record, sink, "cancelled"))
             await self._finish_row(record, RunState.CANCELLED)
+        elif reason == "cancelled":
+            # The gateway cancelled the row (another process, M4): the row is
+            # already final, but the event log still needs its last word.
+            await sink.write_terminal(self._status_envelope(record, sink, "cancelled"))
         elif reason == "sigterm":
             # §3.2: drained and requeued WITHOUT consuming an attempt —
             # release() gives back the claim's attempt increment. Not
@@ -540,6 +671,10 @@ class Worker:
             run_id=record.id,
             thread_id=record.thread_id or record.id,
             agent_name=self._agent_name,
+            # The initiator (X-User-Id / X-User-Roles, D13) — §2.7: tools see
+            # the run's user and roles through ``runtime.context``.
+            user_id=record.user_id,
+            roles=tuple(record.roles),
             attempt=record.attempt,
             # A6: stable per run — one run = one execution = one user turn.
             idempotency_key=record.id,

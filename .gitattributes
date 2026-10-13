@@ -1,0 +1,3 @@
+# Vendored third-party assets are pinned by sha256 (vdreamer.vendored): never
+# normalize their line endings, or the hashes drift between checkouts.
+src/vdreamer/gateway/static/vendor/** -text

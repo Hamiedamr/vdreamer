@@ -4,9 +4,7 @@ A Python SDK + CLI that serves developer-written `BaseAgent` subclasses — Lang
 
 ## Status
 
-Pre-1.0 (`0.1.0`). Milestone 0 (Repo Bootstrap & CI Foundation) and Milestone 1 (Developer Contract Core) are **complete** (`docs/tasks.md`).
-
-Today the repo holds the `BaseAgent` developer contract (with `BuildContext.agent_kwargs()`), the run context and implicit helpers (`emit_*`, `require_approval`), tool policies and `@vdreamer.tool`, agent discovery (specs, a `vdreamer.yaml` registry, `--agents-dir`), the `AsyncPostgresSaver` factory, the `AgentRunner` run driver, tests, and CI. Still missing, per later milestones: runs/queue, the REST/SSE gateway, HITL endpoints, artifacts, MCP, models/resources.
+Pre-1.0 (`0.1.0`). Milestones 0–4 are **complete** (`docs/tasks.md`): the `BaseAgent` developer contract, protocol v1.0 with the v2/v3 stream drivers, the Postgres run queue with workers and crash recovery, and the FastAPI REST/SSE gateway under `/api/v1` (threads, runs, resumable SSE, the interrupt inbox and resolve endpoint, the artifact routes, internal auth, Prometheus metrics, OpenAPI 3.1, and Swagger UI from vendored assets). Still to come, per later milestones: the governed tool pipeline + MCP, artifact storage (MinIO, Parquet), the sandbox, models/resources, the rest of HITL, `/trigger` + the outbox, packaging, and the UC1–UC3 reference agents.
 
 ## Development quickstart
 
@@ -16,6 +14,7 @@ Prerequisites: Python >= 3.11, and uv (the package manager for this repo; vdream
 uv sync --locked --all-extras          # dev environment from the committed uv.lock
 uv run pytest                          # full test suite
 uv run pytest tests/contract          # the Milestone-1 exit criterion (contract suite)
+uv run pytest tests/api               # the Milestone-4 exit criterion (REST contract suite)
 uv run pytest -m smoke                 # the subset CI runs against the floor and latest 1.x pins (A41)
 uv run ruff check .                    # lint (.agents/ excluded: installed skills are reference material)
 uv run mypy                            # type-check (src/, strict)
@@ -23,6 +22,14 @@ uv run vdreamer --version
 uv run vdreamer validate pinger:agent # smoke agent; needs examples/smoke on PYTHONPATH
 uv run vdreamer doctor --offline      # asserts zero egress
 ```
+
+To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input`: it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, with checkpoints on SQLite. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
+
+```
+PYTHONPATH=examples/smoke uv run vdreamer dev --agent pinger:agent --port 8000
+```
+
+In production, `vdreamer serve` (the gateway) and one `vdreamer worker --agent NAME` per agent share Postgres (`VDREAMER_PG_DSN`); run `vdreamer migrate` once first.
 
 For `validate pinger:agent`, make `examples/smoke/` importable first: bash `PYTHONPATH=examples/smoke uv run vdreamer validate pinger:agent`, or in PowerShell `$env:PYTHONPATH = "examples/smoke"`. CI does the same for the plain-pip job.
 
@@ -38,8 +45,8 @@ For `validate pinger:agent`, make `examples/smoke/` importable first: bash `PYTH
 
 ## Repository layout
 
-- `src/vdreamer/` — the package: `cli`, `agents` (`BaseAgent` contract), `context` (run context + helpers), `runtime` (`AgentRunner`), `tools` (policies + `@vdreamer.tool`), `discovery`, `persistence`, `validate`, `doctor`.
-- `tests/` — pytest suite: CLI, validate, doctor, plus `tests/contract/` (the Milestone-1 contract suite, the `uv run pytest tests/contract` exit criterion).
+- `src/vdreamer/` — the package: `cli`, `agents` (`BaseAgent` contract), `context` (run context + helpers), `runtime` (`AgentRunner`), `tools` (policies + `@vdreamer.tool`), `discovery`, `persistence`, `validate`, `doctor`; `events`/`streaming`/`eventlog` (protocol + drivers + event log); `queue`/`worker`/`entrypoints`/`migrate` (runs and processes); `gateway/` (the FastAPI REST/SSE app and its vendored static assets), `threads`, `interrupts`, `artifacts`, `metrics`, `protocol_schema`, `vendored`.
+- `tests/` — pytest suite per area: `contract/` (M1), `golden/` + `streaming/` + `protocol/` (M2), `queue/` + `worker/` (M3), `api/` (M4), plus CLI, validate, doctor.
 - `examples/smoke/` — `pinger.py`, the Milestone-0 smoke agent the CI matrix runs (the UC1–UC3 reference agents land with Milestone 12).
 - `docs/` — `PRD.md` (the spec), `tasks.md` (the milestone plan).
 - Root: `AGENTS.md`, `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`.

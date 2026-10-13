@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from langchain_core.runnables import RunnableConfig
 
@@ -25,6 +25,25 @@ from vdreamer.context import VDreamerContext, bind_context
 from vdreamer.eventlog import EventSink
 from vdreamer.streaming import StreamSpec, make_stream_driver, stream_driver_from_env
 from vdreamer.validate import ensure_compiled
+
+#: The ``configurable`` key carrying the run id into every checkpoint (M4).
+#: LangGraph copies ``configurable`` scalars into checkpoint metadata
+#: (verified on langgraph 1.2.15), so a worker can tell whether a thread's
+#: latest checkpoint was written by *this* run — and resume it from the
+#: checkpoint instead of re-driving the input (PRD §3.2 recovery).
+RUN_ID_CONFIGURABLE_KEY: Final[str] = "vdreamer_run_id"
+
+#: ``configurable`` keys a client's run ``config`` may not set (§2.5): the
+#: thread and checkpoint addressing are the server's, as is the run id above.
+#: Keys starting with ``__`` are LangGraph-internal and reserved as well.
+RESERVED_CONFIGURABLE_KEYS: Final[frozenset[str]] = frozenset(
+    {"thread_id", "checkpoint_id", "checkpoint_ns", "checkpoint_map", RUN_ID_CONFIGURABLE_KEY}
+)
+
+
+def is_reserved_configurable_key(key: str) -> bool:
+    """Whether a client may not set ``key`` in ``config.configurable``."""
+    return key in RESERVED_CONFIGURABLE_KEYS or key.startswith("__")
 
 
 @dataclass(frozen=True)
@@ -83,6 +102,16 @@ class AgentRunner:
     def compiled(self) -> Any:
         """The cached compiled graph; ``None`` until the first ``build()``."""
         return self._compiled
+
+    @property
+    def has_checkpointer(self) -> bool:
+        """Whether runs persist checkpoints (the worker's resume decisions need one)."""
+        return self._checkpointer is not None
+
+    async def aget_state(self, config: RunnableConfig) -> Any:
+        """The thread's latest ``StateSnapshot`` (``values``, ``next``, ``interrupts``,
+        ``metadata``) — LangGraph's own ``aget_state`` on the cached graph."""
+        return await self.build().aget_state(config)
 
     def _resolve_durability(self, durability: Literal["sync", "async"] | None) -> str:
         """Resolve the durability for a run (A42).

@@ -30,7 +30,7 @@ import enum
 import json
 import time
 import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, Final, TypeAlias
@@ -154,6 +154,15 @@ class RunRecord:
 
     Timestamps are plain floats from the backend's clock — the in-memory
     queue's injectable clock, epoch seconds for Postgres.
+
+    The Milestone-4 columns carry what the gateway knows at enqueue time:
+    ``user_id`` / ``roles`` are the initiator's identity (``X-User-Id`` /
+    ``X-User-Roles``, D13) — the worker binds them into the run's
+    ``VDreamerContext`` (§2.7) and approval authority defaults to the
+    initiator (§4.3); ``config`` is the validated ``{input, config?}`` run
+    config (§2.5); ``resume`` is the resume map ``{interrupt_id: value}`` an
+    interrupt resolution plants before requeueing (§3.2: "resolution enqueues
+    a resume") — the worker turns it into ``Command(resume=...)``.
     """
 
     id: str
@@ -166,6 +175,10 @@ class RunRecord:
     lease_expires_at: float | None
     created_at: float
     updated_at: float
+    user_id: str | None = None
+    roles: tuple[str, ...] = ()
+    config: Mapping[str, Any] | None = None
+    resume: Mapping[str, Any] | None = None
 
 
 def _new_run_id() -> str:
@@ -190,11 +203,16 @@ class RunQueue(abc.ABC):
         thread_id: str | None,
         run_id: str | None,
         wait_for_idle: bool = False,
+        user_id: str | None = None,
+        roles: Sequence[str] = (),
+        config: Mapping[str, Any] | None = None,
     ) -> RunRecord:
         """Create a ``queued`` run and return its record.
 
         ``run_id`` may be supplied (the gateway does, for ``/trigger``
-        replay, A18); ``None`` generates one. The one-active-run-per-thread
+        replay, A18); ``None`` generates one. ``user_id`` / ``roles`` /
+        ``config`` are stored on the row as-is (see :class:`RunRecord`).
+        The one-active-run-per-thread
         guard (D12/A11): when the thread already has a run in an active
         state, the call conflicts — unless ``wait_for_idle`` is set *and*
         every active run of the thread is :data:`WAITABLE_STATES`
@@ -209,12 +227,16 @@ class RunQueue(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def claim(self, claimant: str) -> RunRecord | None:
+    async def claim(self, claimant: str, *, agent: str | None = None) -> RunRecord | None:
         """Atomically start the oldest claimable ``queued`` run, or ``None``.
 
         A run is claimable when its thread has no run in ``running`` or
         ``awaiting_approval`` — that is what makes a ``wait_for_idle`` run
-        wait. The claim stamps ``claimed_by``, sets
+        wait. ``agent`` restricts the claim to that agent's runs: one worker
+        serves one agent (§2.1), and every agent's workers share the one
+        ``runs`` table, so a worker must never claim another agent's run.
+        ``None`` claims any agent's run (single-agent tests). The claim
+        stamps ``claimed_by``, sets
         ``lease_expires_at = now + LEASE_INTERVAL_S``, and increments
         ``attempt``.
         """
@@ -252,21 +274,43 @@ class RunQueue(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def resume(self, run_id: str) -> None:
+    async def resume(self, run_id: str, resume: Mapping[str, Any] | None = None) -> None:
         """``awaiting_approval → queued`` (resolution enqueues a resume).
 
         The stale claim is cleared; the next claim stamps a fresh one.
+        ``resume`` — the resume map ``{interrupt_id: value}`` the gateway built
+        from the resolutions (§4.3) — is stored on the row for the worker's
+        ``Command(resume=...)``; ``None`` keeps whatever the row carries.
 
         Raises:
             InvalidTransition: the run is not ``awaiting_approval``.
         """
 
     @abc.abstractmethod
-    async def cancel(self, run_id: str) -> bool:
-        """Mark a run ``cancelled``; ``False`` when it is not active.
+    async def cancel(self, run_id: str) -> RunState | None:
+        """Mark a run ``cancelled``; return its prior status, ``None`` when not active.
 
         Any active state (``queued``, ``running``, ``awaiting_approval``)
-        may be cancelled; WP2's ``RunControl`` drains the live worker.
+        may be cancelled. The prior status tells the caller who owes the
+        run's final ``run.status`` event: a ``running`` run's worker notices
+        on its next heartbeat and drains (WP2's ``RunControl``), emitting it;
+        a ``queued`` or ``awaiting_approval`` run has no worker, so the
+        gateway emits it (M4).
+        """
+
+    @abc.abstractmethod
+    async def list_for_thread(self, thread_id: str) -> list[RunRecord]:
+        """Every run of ``thread_id``, oldest first (``created_at``, ``id``).
+
+        The gateway's thread views (§2.5): ``GET /threads/{id}`` lists them and
+        ``GET /threads/{id}/events`` joins the active — else the latest — one.
+        """
+
+    @abc.abstractmethod
+    async def count_by_status(self) -> dict[RunState, int]:
+        """Run counts per status — the ``queue depth`` metric (§5.4).
+
+        Statuses with no runs are omitted.
         """
 
     @abc.abstractmethod
@@ -331,6 +375,9 @@ class InMemoryRunQueue(RunQueue):
         thread_id: str | None,
         run_id: str | None,
         wait_for_idle: bool = False,
+        user_id: str | None = None,
+        roles: Sequence[str] = (),
+        config: Mapping[str, Any] | None = None,
     ) -> RunRecord:
         async with self._lock:
             now = self._clock()
@@ -364,11 +411,14 @@ class InMemoryRunQueue(RunQueue):
                 lease_expires_at=None,
                 created_at=now,
                 updated_at=now,
+                user_id=user_id,
+                roles=tuple(roles),
+                config=dict(config) if config is not None else None,
             )
             self._runs[record.id] = record
             return record
 
-    async def claim(self, claimant: str) -> RunRecord | None:
+    async def claim(self, claimant: str, *, agent: str | None = None) -> RunRecord | None:
         async with self._lock:
             now = self._clock()
             # Threads with a running/awaiting run are busy: their queued runs
@@ -384,7 +434,9 @@ class InMemoryRunQueue(RunQueue):
                 (
                     run
                     for run in self._runs.values()
-                    if run.status is RunState.QUEUED and run.thread_id not in blocked
+                    if run.status is RunState.QUEUED
+                    and run.thread_id not in blocked
+                    and (agent is None or run.agent == agent)
                 ),
                 key=lambda run: (run.created_at, run.id),
             )
@@ -429,23 +481,42 @@ class InMemoryRunQueue(RunQueue):
             # Approvals free the worker (§3.2): no lease while suspended.
             self._runs[run_id] = replace(updated, lease_expires_at=None)
 
-    async def resume(self, run_id: str) -> None:
+    async def resume(self, run_id: str, resume: Mapping[str, Any] | None = None) -> None:
         async with self._lock:
             run = self._runs.get(run_id)
             if run is None:
                 raise InvalidTransition(run_id, None, RunState.QUEUED)
             updated = self._transition(run, RunState.QUEUED, self._clock())
             # Back to the queue: the claim is stale, the next claim restamps it.
-            self._runs[run_id] = replace(updated, claimed_by=None, lease_expires_at=None)
+            self._runs[run_id] = replace(
+                updated,
+                claimed_by=None,
+                lease_expires_at=None,
+                resume=dict(resume) if resume is not None else run.resume,
+            )
 
-    async def cancel(self, run_id: str) -> bool:
+    async def cancel(self, run_id: str) -> RunState | None:
         async with self._lock:
             run = self._runs.get(run_id)
             if run is None or run.status not in ACTIVE_STATES:
-                return False
+                return None
             updated = self._transition(run, RunState.CANCELLED, self._clock())
             self._runs[run_id] = replace(updated, claimed_by=None, lease_expires_at=None)
-            return True
+            return run.status
+
+    async def list_for_thread(self, thread_id: str) -> list[RunRecord]:
+        async with self._lock:
+            return sorted(
+                (run for run in self._runs.values() if run.thread_id == thread_id),
+                key=lambda run: (run.created_at, run.id),
+            )
+
+    async def count_by_status(self) -> dict[RunState, int]:
+        async with self._lock:
+            counts: dict[RunState, int] = {}
+            for run in self._runs.values():
+                counts[run.status] = counts.get(run.status, 0) + 1
+            return counts
 
     async def release(self, run_id: str) -> None:
         async with self._lock:
@@ -514,15 +585,19 @@ def _load_async_connection_class() -> Any:
 
 
 #: The ``runs`` columns every RETURNING/SELECT projects, in table order.
+#: Indices matter: :meth:`PostgresRunQueue._row_to_record` maps by position.
 _RUN_COLUMNS: Final[str] = (
     "id, thread_id, agent, input, status, attempt, "
-    "claimed_by, lease_expires_at, created_at, updated_at"
+    "claimed_by, lease_expires_at, created_at, updated_at, "
+    "user_id, roles, config, resume"
 )
 
 #: Idempotent DDL — WP3's ``migrate`` reuses this constant. The partial index
 #: is the one-active-run-per-thread guard (D12/A11): it covers exactly the
 #: active statuses, so the conflict check and the claim's thread-busy check
-#: are index scans.
+#: are index scans. The ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` lines
+#: upgrade a Milestone-3 ``runs`` table in place (the M4 identity, config and
+#: resume columns); on a fresh table they are no-ops.
 RUNS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS runs (
     id               text        PRIMARY KEY,
@@ -534,37 +609,55 @@ CREATE TABLE IF NOT EXISTS runs (
     claimed_by       text,
     lease_expires_at timestamptz,
     created_at       timestamptz NOT NULL DEFAULT now(),
-    updated_at       timestamptz NOT NULL DEFAULT now()
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    user_id          text,
+    roles            jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    config           jsonb,
+    resume           jsonb
 );
+
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS user_id text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS roles jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS config jsonb;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS resume jsonb;
 
 CREATE INDEX IF NOT EXISTS runs_active_thread_idx
     ON runs (thread_id)
-    WHERE status IN ('queued', 'running', 'awaiting_approval')
+    WHERE status IN ('queued', 'running', 'awaiting_approval');
+
+CREATE INDEX IF NOT EXISTS runs_thread_created_idx
+    ON runs (thread_id, created_at)
 """
 
-#: The one-active-run check (D12/A11), locked so two racing enqueues for one
-#: thread serialize inside the enqueue transaction.
-_ENQUEUE_CHECK_SQL: Final[str] = f"""
-SELECT {_RUN_COLUMNS}
+#: Serializes every enqueue for one thread (D12/A11): a transaction-scoped
+#: advisory lock keyed on the thread id, held until the enqueue transaction
+#: commits. Row locks cannot do this job — with no active row there is nothing
+#: to lock, so two racing enqueues would both pass the check — and ``SKIP
+#: LOCKED`` would even skip an active row a concurrent claim holds, letting the
+#: guard leak.
+_ENQUEUE_LOCK_SQL: Final[str] = "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))"
+
+#: The one-active-run check (D12/A11), run under :data:`_ENQUEUE_LOCK_SQL`.
+_ENQUEUE_CHECK_SQL: Final[str] = """
+SELECT id, status
 FROM runs
 WHERE thread_id = %s
   AND status IN ('queued', 'running', 'awaiting_approval')
 ORDER BY created_at, id
-FOR UPDATE SKIP LOCKED
 """
 
 _ENQUEUE_SQL: Final[str] = f"""
-INSERT INTO runs (id, thread_id, agent, input, status, attempt)
-VALUES (%s, %s, %s, %s::jsonb, 'queued', 0)
+INSERT INTO runs (id, thread_id, agent, input, status, attempt, user_id, roles, config)
+VALUES (%s, %s, %s, %s::jsonb, 'queued', 0, %s, %s::jsonb, %s::jsonb)
 RETURNING {_RUN_COLUMNS}
 """
 
-#: The claim: one statement — pick the oldest ``queued`` run whose thread has
-#: no ``running``/``awaiting_approval`` run, lock it (``SKIP LOCKED`` so
-#: concurrent workers never block each other), and flip it to ``running``
-#: with a fresh lease and ``attempt + 1``. A single statement is its own
-#: transaction. Residual race (accepted for M3): two queued runs of one
-#: thread — only possible via ``wait_for_idle`` — could be claimed by two
+#: The claim: one statement — pick the oldest ``queued`` run of this worker's
+#: agent whose thread has no ``running``/``awaiting_approval`` run, lock it
+#: (``SKIP LOCKED`` so concurrent workers never block each other), and flip it
+#: to ``running`` with a fresh lease and ``attempt + 1``. A single statement is
+#: its own transaction. Residual race (accepted for M3): two queued runs of
+#: one thread — only possible via ``wait_for_idle`` — could be claimed by two
 #: workers in the same instant, because the second worker's snapshot predates
 #: the first one's commit; the enqueue-time guard remains the primary defense.
 _CLAIM_SQL: Final[str] = f"""
@@ -572,6 +665,7 @@ WITH candidate AS (
     SELECT r.id
     FROM runs AS r
     WHERE r.status = 'queued'
+      AND (%s::text IS NULL OR r.agent = %s::text)
       AND NOT EXISTS (
           SELECT 1
           FROM runs AS other
@@ -610,14 +704,24 @@ SET status = %s,
 WHERE id = %s AND status = 'running'
 """
 
-_CANCEL_SQL: Final[str] = f"""
+#: Cancel any active run and report the status it had: the ``prior`` CTE locks
+#: and reads the row before the UPDATE rewrites it, so the caller learns who
+#: owes the final ``run.status`` event (see ``RunQueue.cancel``).
+_CANCEL_SQL: Final[str] = """
+WITH prior AS (
+    SELECT id, status
+    FROM runs
+    WHERE id = %s AND status IN ('queued', 'running', 'awaiting_approval')
+    FOR UPDATE
+)
 UPDATE runs
 SET status = 'cancelled',
     claimed_by = NULL,
     lease_expires_at = NULL,
     updated_at = now()
-WHERE id = %s AND status IN ('queued', 'running', 'awaiting_approval')
-RETURNING {_RUN_COLUMNS}
+FROM prior
+WHERE runs.id = prior.id
+RETURNING prior.status
 """
 
 #: The SIGTERM drain path (PRD §3.2: requeued without consuming an attempt):
@@ -643,11 +747,13 @@ SET status = 'awaiting_approval',
 WHERE id = %s AND status = 'running'
 """
 
+#: ``COALESCE`` keeps the row's resume map when the caller passes none.
 _RESUME_SQL: Final[str] = """
 UPDATE runs
 SET status = 'queued',
     claimed_by = NULL,
     lease_expires_at = NULL,
+    resume = COALESCE(%s::jsonb, resume),
     updated_at = now()
 WHERE id = %s AND status = 'awaiting_approval'
 """
@@ -683,6 +789,20 @@ FROM runs
 WHERE id = %s
 """
 
+_LIST_THREAD_SQL: Final[str] = f"""
+SELECT {_RUN_COLUMNS}
+FROM runs
+WHERE thread_id = %s
+ORDER BY created_at, id
+"""
+
+_COUNT_BY_STATUS_SQL: Final[str] = "SELECT status, count(*) FROM runs GROUP BY status"
+
+
+def _json_param(value: Any) -> str | None:
+    """A ``jsonb`` parameter: ``None`` stays SQL NULL, anything else is JSON text."""
+    return None if value is None else json.dumps(value)
+
 
 class PostgresRunQueue(RunQueue):
     """The production queue over the ``runs`` table (A7: Postgres-only transport).
@@ -715,12 +835,14 @@ class PostgresRunQueue(RunQueue):
 
     @staticmethod
     def _row_to_record(row: Any) -> RunRecord:
-        """Map a ``runs`` row onto a ``RunRecord``.
+        """Map a ``runs`` row (:data:`_RUN_COLUMNS` order) onto a ``RunRecord``.
 
         ``timestamptz`` cells arrive as aware datetimes and become epoch
-        seconds, matching the in-memory queue's clock numbers.
+        seconds, matching the in-memory queue's clock numbers; ``jsonb`` cells
+        arrive already decoded.
         """
         lease, created, updated = row[7], row[8], row[9]
+        roles = row[11] or []
         return RunRecord(
             id=str(row[0]),
             thread_id=str(row[1]),
@@ -732,17 +854,26 @@ class PostgresRunQueue(RunQueue):
             lease_expires_at=lease.timestamp() if lease is not None else None,
             created_at=created.timestamp(),
             updated_at=updated.timestamp(),
+            user_id=str(row[10]) if row[10] is not None else None,
+            roles=tuple(str(role) for role in roles),
+            config=row[12],
+            resume=row[13],
         )
 
     async def setup(self) -> None:
-        """Create the ``runs`` table + index if missing (idempotent).
+        """Create the ``runs`` table + indexes if missing (idempotent).
 
         ``migrate`` (WP3) reuses :data:`RUNS_DDL`; this boot-time guard lets
         a fresh database work without it. The DDL is parameterless, so
-        psycopg's simple query protocol runs both statements in one call.
+        psycopg's simple query protocol runs every statement in one call.
         """
         async with self._conn() as conn:
             await conn.execute(RUNS_DDL)
+
+    async def probe(self) -> None:
+        """Readiness probe (``/readyz``): one round trip, raising when Postgres is down."""
+        async with self._conn() as conn:
+            await conn.execute("SELECT 1")
 
     async def enqueue(
         self,
@@ -752,6 +883,9 @@ class PostgresRunQueue(RunQueue):
         thread_id: str | None,
         run_id: str | None,
         wait_for_idle: bool = False,
+        user_id: str | None = None,
+        roles: Sequence[str] = (),
+        config: Mapping[str, Any] | None = None,
     ) -> RunRecord:
         if run_id is None:
             run_id = _new_run_id()
@@ -761,13 +895,14 @@ class PostgresRunQueue(RunQueue):
                 "its thread (PRD §3.1) — resolve the thread before enqueueing"
             )
         async with self._conn() as conn:
-            # One transaction: the active-run check and the INSERT land
-            # together, guarded by the same row locks (D12/A11).
+            # One transaction: the per-thread lock, the active-run check and
+            # the INSERT land together (D12/A11).
             async with conn.transaction():
+                await conn.execute(_ENQUEUE_LOCK_SQL, (thread_id,))
                 cur = await conn.execute(_ENQUEUE_CHECK_SQL, (thread_id,))
                 active = await cur.fetchall()
                 if active:
-                    statuses = [RunState(str(row[1])) for row in active]
+                    statuses = [RunState(str(row[1])) for row in active]  # (id, status)
                     if not (
                         wait_for_idle and all(state in WAITABLE_STATES for state in statuses)
                     ):
@@ -775,16 +910,25 @@ class PostgresRunQueue(RunQueue):
                             active_run_id=str(active[0][0]), reason="thread_has_active_run"
                         )
                 cur = await conn.execute(
-                    _ENQUEUE_SQL, (run_id, thread_id, agent, json.dumps(input))
+                    _ENQUEUE_SQL,
+                    (
+                        run_id,
+                        thread_id,
+                        agent,
+                        json.dumps(input),
+                        user_id,
+                        json.dumps(list(roles)),
+                        _json_param(dict(config) if config is not None else None),
+                    ),
                 )
                 row = await cur.fetchone()
         if row is None:  # pragma: no cover - INSERT..RETURNING always yields a row
             raise RuntimeError("runs insert returned no row")
         return self._row_to_record(row)
 
-    async def claim(self, claimant: str) -> RunRecord | None:
+    async def claim(self, claimant: str, *, agent: str | None = None) -> RunRecord | None:
         async with self._conn() as conn:
-            cur = await conn.execute(_CLAIM_SQL, (claimant, LEASE_INTERVAL_S))
+            cur = await conn.execute(_CLAIM_SQL, (agent, agent, claimant, LEASE_INTERVAL_S))
             row = await cur.fetchone()
         return self._row_to_record(row) if row is not None else None
 
@@ -812,17 +956,18 @@ class PostgresRunQueue(RunQueue):
             if cur.rowcount == 0:
                 raise InvalidTransition(run_id, None, RunState.AWAITING_APPROVAL)
 
-    async def resume(self, run_id: str) -> None:
+    async def resume(self, run_id: str, resume: Mapping[str, Any] | None = None) -> None:
+        resume_param = _json_param(dict(resume) if resume is not None else None)
         async with self._conn() as conn:
-            cur = await conn.execute(_RESUME_SQL, (run_id,))
+            cur = await conn.execute(_RESUME_SQL, (resume_param, run_id))
             if cur.rowcount == 0:
                 raise InvalidTransition(run_id, None, RunState.QUEUED)
 
-    async def cancel(self, run_id: str) -> bool:
+    async def cancel(self, run_id: str) -> RunState | None:
         async with self._conn() as conn:
             cur = await conn.execute(_CANCEL_SQL, (run_id,))
             row = await cur.fetchone()
-        return row is not None
+        return RunState(str(row[0])) if row is not None else None
 
     async def release(self, run_id: str) -> None:
         async with self._conn() as conn:
@@ -835,6 +980,18 @@ class PostgresRunQueue(RunQueue):
             cur = await conn.execute(_GET_SQL, (run_id,))
             row = await cur.fetchone()
         return self._row_to_record(row) if row is not None else None
+
+    async def list_for_thread(self, thread_id: str) -> list[RunRecord]:
+        async with self._conn() as conn:
+            cur = await conn.execute(_LIST_THREAD_SQL, (thread_id,))
+            rows = await cur.fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    async def count_by_status(self) -> dict[RunState, int]:
+        async with self._conn() as conn:
+            cur = await conn.execute(_COUNT_BY_STATUS_SQL)
+            rows = await cur.fetchall()
+        return {RunState(str(row[0])): int(row[1]) for row in rows}
 
     async def requeue_expired(self) -> int:
         async with self._conn() as conn:

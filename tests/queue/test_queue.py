@@ -308,10 +308,10 @@ async def test_finish_from_queued_is_invalid() -> None:
 async def test_terminal_states_are_final() -> None:
     q = InMemoryRunQueue(_Clock())
     run = await q.enqueue("a", {}, thread_id="t1", run_id=None)
-    assert await q.cancel(run.id) is True
+    assert await q.cancel(run.id) is RunState.QUEUED
     with pytest.raises(InvalidTransition):
         await q.finish(run.id, RunState.COMPLETED)
-    assert await q.cancel(run.id) is False
+    assert await q.cancel(run.id) is None
 
 
 @pytest.mark.parametrize("setup_state", ["queued", "running", "awaiting_approval"])
@@ -322,13 +322,14 @@ async def test_cancel_from_active_states(setup_state: str) -> None:
         await q.claim("w1")
         if setup_state == "awaiting_approval":
             await q.suspend(run.id)
-    assert await q.cancel(run.id) is True
+    # cancel reports the prior status: it tells the caller who owes the final event.
+    assert await q.cancel(run.id) is RunState(setup_state)
     final = await q.get(run.id)
     assert final is not None
     assert final.status is RunState.CANCELLED
     assert final.claimed_by is None
     assert final.lease_expires_at is None
-    assert await q.cancel(run.id) is False  # terminal
+    assert await q.cancel(run.id) is None  # terminal
 
 
 async def test_cancel_false_from_terminal_and_unknown() -> None:
@@ -336,8 +337,8 @@ async def test_cancel_false_from_terminal_and_unknown() -> None:
     run = await q.enqueue("a", {}, thread_id="t1", run_id=None)
     await q.claim("w1")
     await q.finish(run.id, RunState.COMPLETED)
-    assert await q.cancel(run.id) is False
-    assert await q.cancel("run_missing") is False
+    assert await q.cancel(run.id) is None
+    assert await q.cancel("run_missing") is None
 
 
 async def test_requeue_expired_requeues_and_preserves_attempt() -> None:
@@ -399,9 +400,20 @@ def test_claim_sql_claims_with_skip_locked() -> None:
 
 def test_enqueue_check_sql_guards_the_thread() -> None:
     sql = queue._ENQUEUE_CHECK_SQL.lower()
-    assert "for update skip locked" in sql
+    # No SKIP LOCKED: skipping an active row a concurrent claim holds would let
+    # the one-active-run guard leak. The per-thread advisory lock serializes.
+    assert "skip locked" not in sql
     assert "status in ('queued', 'running', 'awaiting_approval')" in sql
     assert "order by" in sql
+    # The status column is the second projected column — the M3 code read the
+    # thread id there, so wait_for_idle could never succeed on Postgres.
+    assert sql.split("from")[0].split() == ["select", "id,", "status"]
+    assert "pg_advisory_xact_lock" in queue._ENQUEUE_LOCK_SQL
+
+
+def test_claim_sql_filters_by_agent() -> None:
+    sql = queue._CLAIM_SQL.lower()
+    assert "r.agent = %s" in sql
 
 
 def test_recovery_sql_branches_on_attempt() -> None:

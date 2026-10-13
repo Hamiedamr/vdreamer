@@ -127,10 +127,14 @@ async def test_postgres_log_write_assembles_sql_and_allocates_seq() -> None:
         "r_1",  # the CTE's per-run WHERE
         "r_1",  # the INSERT's run_id
         "tool.call",
-        ["child:abc"],  # ns -> JSON array
-        {"tool_call_id": "tc_1"},
+        '["child:abc"]',  # ns -> JSON text, cast ::jsonb (psycopg sends lists as arrays)
+        '{"tool_call_id": "tc_1"}',  # psycopg cannot adapt a bare dict
         "2026-10-13T12:00:00+00:00",
     )
+    # The live fan-out (A7): NOTIFY {run_id, seq} in the insert's transaction.
+    notify_sql, notify_params = conn.statements[1]
+    assert notify_sql == eventlog._NOTIFY_SQL
+    assert notify_params == (eventlog.EVENTS_NOTIFY_CHANNEL, '{"run_id": "r_1", "seq": 7}')
     # The allocated seq lands on the envelope so sse_id is usable right away.
     assert envelope.seq == 7
     assert envelope.sse_id == "r_1:7"

@@ -33,12 +33,13 @@ The exactly-once recipe (A6), and what the test pins:
   ``attempt`` remains a separate ``VDreamerContext`` field.
 - The pre-kill checkpoint survives: the ``first`` node's attempt-1 append to
   the additive ``ops`` channel is still in the state the resumed run built
-  on. The re-claim re-drives the row's input (langgraph starts a fresh
-  superstep on the same thread), so completed nodes re-execute too — the
-  ledger, not node skipping, is what keeps the *side effect* exactly-once;
-  planting a literal ``Command(resume=...)``/``None`` resume on requeued
-  rows is the gateway's M4 planting job (same mechanism as approval
-  resumes).
+  on. Since Milestone 4 the re-claim resumes *from the checkpoint*: the
+  thread's latest checkpoint carries this run's id
+  (``RUN_ID_CONFIGURABLE_KEY``) with ``charge`` still to run, so the worker
+  feeds the graph ``None`` instead of re-driving the input
+  (``Worker._graph_input``). Completed nodes do not re-execute (``first`` ran
+  once); only the in-flight node does — and the ledger keyed on
+  ``ctx.idempotency_key`` is what keeps its *side effect* exactly-once.
 """
 
 from __future__ import annotations
@@ -300,16 +301,18 @@ async def test_kill_midrun_resumes_and_the_side_effect_runs_exactly_once() -> No
     assert snapshot.values["flag"] == ledger.recorded[record.id], (
         "the re-executed node returned the ledger's recorded result"
     )
-    assert snapshot.values["ops"] == ["first@1", "first@2", "charge@2"], (
-        "the pre-kill checkpointed state survived the kill and carried into the resume"
+    assert snapshot.values["ops"] == ["first@1", "charge@2"], (
+        "the pre-kill checkpoint survived the kill and the resume continued from it: "
+        "the completed node did not re-run, only the in-flight one re-executed"
     )
 
     sink2 = sinks2[record.id]
+    # Attempt 2 resumed at ``charge``: ``first`` emits nothing again.
     assert [
         envelope.payload.get("label")
         for envelope in sink2.events
         if envelope.type.value == "progress"
-    ] == ["first-done", "effect-done", "charge-done"]
+    ] == ["effect-done", "charge-done"]
     assert [
         envelope.payload.get("status")
         for envelope in sink2.events

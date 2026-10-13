@@ -2,7 +2,13 @@
 
 ## Repository state
 
-- Spec plus Milestone 1 (Developer Contract Core) landed: `docs/PRD.md` is the entire product spec and the contract for everything built here. The repo holds `src/vdreamer`: the full `BaseAgent`/`BuildContext` contract (`agents.py`, incl. `agent_kwargs()`, `tool_policies`, `interrupt_policies`, `durability`), the run context and implicit helpers (`context.py`), the `AgentRunner` run driver (`runtime.py`), tool policies + `@vdreamer.tool` + the pass-through `VDreamerToolMiddleware` (`tools.py`), discovery incl. the `vdreamer.yaml` registry + `--agents-dir` (`discovery.py`), the Postgres checkpointer factory (`persistence.py`), the extended checks (`validate.py`, CLI `validate` takes `--registry`/`--agents-dir`), `doctor`, and the CLI. Tests are `tests/` (CLI, validate, doctor) plus `tests/contract/` (the M1 contract suite — `uv run pytest tests/contract` is that milestone's exit criterion); `examples/smoke/`, `uv.lock`, and CI complete it. Anything past Milestone 1 (runs/queue, REST/SSE, event pipeline, HITL endpoints, artifacts, tools/MCP governance pipeline, models/resources) does not exist yet — never assume an implementation exists.
+- Milestones 0–4 landed (`docs/tasks.md` tracks each item and what it defers); `docs/PRD.md` is the entire product spec and the contract for everything built here. `src/vdreamer` holds:
+  - **M1 developer contract:** `agents.py` (`BaseAgent`/`BuildContext`, `agent_kwargs()`, `tool_policies`, `interrupt_policies`, `durability`), `context.py` (run context + implicit helpers), `runtime.py` (`AgentRunner`), `tools.py` (policies, `@vdreamer.tool`, pass-through `VDreamerToolMiddleware`), `discovery.py`, `persistence.py`, `validate.py`, `doctor.py`, `cli.py`.
+  - **M2 protocol + event pipeline:** `events.py` (envelope + payload models), `streaming.py` (the one adapter module, v2/v3 drivers, A31), `eventlog.py` (sinks, `run_events`, and since M4 the replay reader, `EventHub`, `NOTIFY`/`LISTEN`).
+  - **M3 runs + topology:** `queue.py` (`runs` table, §3.2 lifecycle, leases), `worker.py`, `entrypoints.py` (`worker`, `dev`, and since M4 `serve`), `migrate.py`.
+  - **M4 REST gateway:** `gateway/` (FastAPI app, D20; never imported by `import vdreamer`), `threads.py`, `interrupts.py` (§4.2 record), `artifacts.py` (read-side contract only), `metrics.py`, `protocol_schema.py`, `vendored.py` (sha256-pinned Swagger UI under `gateway/static/vendor/`).
+- Tests: `tests/` per area — `contract/` (M1 exit), `golden/` (M2 v2↔v3 parity), `worker/` (M3 exit), `api/` (M4 exit: `uv run pytest tests/api`). Live-Postgres tests skip unless `VDREAMER_TEST_PG_DSN` is set. `tests/` has no `__init__.py`: shared kits are `_kit.py`/`_api.py`, and test module basenames must be unique across directories.
+- Not built yet (M5+): the governed tool pipeline + MCP, the artifact write side (MinIO, Parquet), `safe_extract`/sandbox, models/resources, the rest of HITL (edit validation, four-eyes, expiry sweeper), `/trigger` + outbox, `export-schema`/`bundle`, `vdreamer run`, the UC1–UC3 reference agents. Never assume an implementation exists — check `docs/tasks.md`.
 - The PRD is the contract for everything built here. Read it before designing or writing code; when it conflicts with intuition, the PRD wins.
 - PRD map: §2 architecture/LangGraph compat/tool governance, §3 events & artifacts, §4 HITL, §5 air-gapped packaging & zero-egress, §7 scope + non-goals. Cross-refs like `A41`/`D11` are assumption/decision IDs; §7.4 defines A24–A44.
 
@@ -37,11 +43,12 @@ Users are AI developers only. vdreamer ships no frontend code. Client apps integ
   - CI is `.github/workflows/ci.yml`: locked / floor (`uv lock --resolution lowest-direct`) / latest (`uv lock --upgrade`) / plain-`pip` wheel install / zero-egress `doctor --offline`. Floor and latest regenerate the lock locally (never committed) and sync with `--frozen`.
 - **Installed agent skills** (`.claude/skills/`, `.agents/skills/`) are reference material. When a skill conflicts with `docs/PRD.md` (for example, it suggests LangSmith, LangGraph Platform, `langgraph.json`, or `npx`/`uvx` launchers), the PRD wins.
 
-## Planned layout (from the PRD; none of this exists yet)
+## Layout (from the PRD; ✓ = exists today)
 
-- One OCI image, two entrypoints: `vdreamer serve` (gateway) and `vdreamer worker`. `vdreamer dev` runs everything in one process on SQLite + a local filesystem store (D11); `serve`/`worker` use Postgres + MinIO.
-- CLI surface: `dev`, `serve`, `worker`, `run` (terminal client for testing agents), `validate`, `migrate`, `export-schema` (also emits the conformance kit), `doctor --offline`, `bundle`.
-- REST under `/api/v1`; SSE with `Last-Event-ID` replay; artifact bytes in MinIO, state/metadata in Postgres.
+- One OCI image, two entrypoints: `vdreamer serve` (gateway ✓) and `vdreamer worker` (✓). `vdreamer dev` (✓) runs gateway + worker in one process on SQLite checkpoints and in-memory stores (D11); `serve`/`worker` use Postgres (✓) + MinIO (M6).
+- CLI surface: `dev` ✓, `serve` ✓, `worker` ✓, `run` (terminal client, M11), `validate` ✓, `migrate` ✓, `export-schema` (also emits the conformance kit, M10), `doctor --offline` ✓, `bundle` (M10).
+- REST under `/api/v1` ✓; SSE with `Last-Event-ID` replay ✓; artifact bytes in MinIO (M6), state/metadata in Postgres.
+- Gateway config is env-only (A23): `VDREAMER_PG_DSN`, `VDREAMER_INTERNAL_TOKEN` (+ `VDREAMER_INTERNAL_TOKEN_PREVIOUS` for rotation, A14). `--host` refuses wildcard binds.
 - `examples/` holds reference agents UC1–UC3. They are the acceptance test: core is P0-complete only when they build **without touching vdreamer internals** (§7.3).
 - Python extras: `[postgres]`, `[minio]`, `[fastembed]`, `[qdrant]`, `[neo4j]`, `[mcp]`, `[sandbox]`.
 
@@ -53,4 +60,6 @@ LLM serving/fine-tuning; end-user auth/LDAP; mail fetching; cron; retrieval pipe
 
 - The reference topology is Linux VMs/containers (§5.1). Sandbox primitives (dedicated uid, rlimits, namespaces — D19/A19) are Unix-only and cannot be exercised on a Windows dev host; run them on Linux CI.
 - `docs/.PRD.md.un~` is a vim undo artifact, not content — ignore it.
+- psycopg 3 cannot adapt a bare `dict` (and sends a `list` as an array): pass `json.dumps(...)` with a `%s::jsonb` cast, as `queue.py`/`eventlog.py` do. Offline fakes don't catch this — add a live-PG test.
+- Vendored assets are sha256-pinned and marked `-text` in `.gitattributes`; after changing one, update `vendored.VENDORED_ASSETS` or `doctor --offline` fails.
 - Build/test commands are recorded in **Tooling** above (landed with Milestone 0).

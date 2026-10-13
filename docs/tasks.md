@@ -97,7 +97,7 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 - [x] Custom data: vdreamer-enveloped custom data → artifact/citation/progress/log events; other custom data → `log`. `ns` is preserved for subgraphs. (`streaming._RunMapper.custom`; `ns` is `[]` at the root.)
 
 **Delivery and testing**
-- [ ] Delta batching (50 ms / 32 tokens), post-run compaction (A4), 15 s heartbeat, `X-Accel-Buffering: no` (A22). (Delta batching landed — `streaming.DeltaBatcher`, unit-tested and driver-wired — with the tuning constants `DELTA_BATCH_*`, `HEARTBEAT_INTERVAL_S`, `SSE_BUFFERING_HEADER`/`_VALUE`; post-run compaction (A4) is not built yet, and the heartbeat + buffering header fire with the M4 SSE transport.)
+- [ ] Delta batching (50 ms / 32 tokens), post-run compaction (A4), 15 s heartbeat, `X-Accel-Buffering: no` (A22). (Delta batching landed — `streaming.DeltaBatcher`, unit-tested and driver-wired — with the tuning constants `DELTA_BATCH_*`, `HEARTBEAT_INTERVAL_S`, `SSE_BUFFERING_HEADER`/`_VALUE`; the heartbeat + buffering header now fire on the M4 SSE transport (`gateway.sse`). Still open: post-run compaction (A4).)
 - [x] Golden-event test suite: both drivers emit **identical** protocol events for the same graphs. This suite is the gate for promoting v3. (`tests/golden/`: all six scenarios at full v2↔v3 parity — no xfail — matched against golden type-sequence data recorded from the drivers plus the §3.3 payload-shape table applied to every event.)
 
 **Exit:** ✅ verified — the golden-event suite passes for the v2 driver with v3 at full parity on every scenario (no xfail needed); v3 stays opt-in beta behind `VDREAMER_STREAM_DRIVER=v3` (langgraph 1.2.15 `LangChainBetaWarning`). `uv run pytest tests/golden` green (7 tests).
@@ -110,7 +110,7 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 
 **Entrypoints and queue**
 - [x] Standard console-script entrypoints (`[project.scripts]`); in the repo, developers run them via `uv run` (`vdreamer = "vdreamer.cli:main"` wired since M0; `migrate`/`worker`/`dev` added in WP3):
-  - `vdreamer serve` (stateless gateway) — lands with Milestone 4.
+  - [x] `vdreamer serve` (stateless gateway) — landed with Milestone 4.
   - [x] `vdreamer worker` — one process, one agent (`--agent` with `--registry`/`--agents-dir`, D2; `--claimant`, default `worker-{hostname}-{pid}`); DSN from `VDREAMER_PG_DSN` (A23), Postgres queue + `run_events` sink, startup recovery.
   - [x] `vdreamer dev` (single process on SQLite + local filesystem store, D11) — in-memory queue and sinks, `--input`/`--thread` smoke of the whole lifecycle, `--db` for the SQLite checkpoint file; hot reload is future work. The checkpointer is `AsyncSqliteSaver` (`langgraph-checkpoint-sqlite` is a base runtime dependency — no fallback, no warning), and the run's checkpoint persists across restarts: a fresh saver re-opened on the same `--db` file reads the final state back.
 - [x] `vdreamer migrate` — idempotent schema application: `RUNS_DDL`, `RUN_EVENTS_DDL`, and the checkpointer's own `setup()`; DSN from `VDREAMER_PG_DSN` only (A23), friendly error without psycopg.
@@ -118,13 +118,13 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 - [x] Run states: `queued → running → (awaiting_approval → running)* → completed | failed | rejected | expired | cancelled`. (WP1: `RunState` + the transition map, enforced per-UPDATE.)
 
 **Cancel, shutdown, recovery**
-- [ ] Cancel: `POST /runs/{id}/cancel` calls `RunControl.request_drain()`, which leaves a resumable checkpoint; the run moves to `cancelled`. (The worker mechanism landed in WP2 — `Worker.request_cancel` drains the local run to `cancelled` with a resumable checkpoint; the POST route is the M4 gateway.)
+- [x] Cancel: `POST /runs/{id}/cancel` calls `RunControl.request_drain()`, which leaves a resumable checkpoint; the run moves to `cancelled`. (WP2's worker mechanism + the M4 route: the gateway marks the row; the owning worker's heartbeat notices within half a lease window, drains with reason `cancelled`, and authors the final event. A `queued`/`awaiting_approval` run has no worker, so the gateway writes it.)
 - [x] Worker SIGTERM: drain and requeue without consuming an attempt. (WP2: `release` gives back the claim's attempt increment; POSIX handler install, portable `drain_all`.)
 - [x] Crash recovery: an expired lease requeues the run with `attempt+1` (max 3) and resumes from the checkpoint. The in-flight node re-executes, so side effects use `ctx.idempotency_key` (A6). (WP1's `requeue_expired` sweep + WP2's `recover_on_start`/lease-lost drain. The re-claim re-drives the row's input on the same checkpointed thread — the checkpointed state carries, and the ledger keyed on `ctx.idempotency_key` — the run id itself, stable across attempts (A6) — keeps the side effect exactly-once; planting a literal resume input on requeued rows is the M4 mechanism, same as approval resumes.)
 - [x] Node timeouts and errors (`NodeTimeoutError`, `NodeError`) map to `run.status.error`. (WP2.)
 
 **Fan-out and concurrency**
-- [ ] `LISTEN/NOTIFY {run_id, seq}` fan-out. Any gateway replica serves any SSE reconnect: replay `seq > Last-Event-ID`, then tail live. (→ M4, with the SSE transport.)
+- [x] `LISTEN/NOTIFY {run_id, seq}` fan-out. Any gateway replica serves any SSE reconnect: replay `seq > Last-Event-ID`, then tail live. (M4: `PostgresEventLog.write` NOTIFYs in the insert's transaction; `PostgresEventListener` feeds an `EventHub`; the SSE loop re-reads the log on every wake-up and every heartbeat, so a lost notification costs latency, never an event.)
 - [x] One active run per thread: `409 {active_run_id, reason}` (D12, A11). `?wait_for_idle=true` queues behind `running` only. (The queue guard + `wait_for_idle` landed in WP1, including the partial index behind it; the 409 render is the M4 gateway.)
 
 **Exit:** ✅ verified — kill a worker mid-run; the run resumes from its checkpoint and the side effect runs exactly once (`tests/worker/test_recovery_idempotency.py`: worker 1 killed mid-run leaves the row claimed with a lapsing lease; the recovery sweep requeues; worker 2 — a fresh runner over the same checkpoint store — re-executes the side-effecting node, whose ledger keeps the effect exactly-once while the node itself runs twice; the run completes on attempt 2 with the pre-kill checkpointed state intact).
@@ -135,31 +135,38 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 
 **Goal:** the full REST surface, with uniform errors and ops endpoints.
 
-**Routes**
-- [ ] `GET /agents`, `GET /agents/{name}` (mode, input JSON Schema).
-- [ ] Threads: create (`201`), list (owner-scoped), get (history from checkpoint), soft delete.
-- [ ] `POST /threads/{id}/runs` → `202 {run_id}`; `GET /runs/{id}`.
-- [ ] SSE with `Last-Event-ID` replay: `GET /runs/{id}/events`, `GET /threads/{id}/events` (joins the active or latest run).
-- [ ] Interrupts: `GET /interrupts`, `GET /interrupts/{id}`, `POST /interrupts/{id}/resolve` (§4).
-- [ ] Artifacts: `/artifacts/{id}`, `/preview`, `/raw`, `/download` (§3.4).
-- [ ] Ops: `GET /protocol/schema.json`, `/openapi.json`, `/healthz`, `/readyz`, `/metrics`.
-- [ ] `GET /api/v1/docs` — Swagger UI served from vendored assets at `/static/vendor/swagger-ui/` (no CDN; §5.2/A13), pointing at `/api/v1/openapi.json`.
-- [ ] Vendored swagger-ui assets ship in the repo and are covered by the zero-egress checks.
-- [ ] The gateway is built on FastAPI (D20), pinned via `uv add fastapi` and subject to the floor/latest CI pins; the framework stays internal — vdreamer's contract is the REST/SSE protocol and OpenAPI 3.1 artifacts.
-- [ ] FastAPI's default docs CDN is overridden: Swagger UI is served from vendored assets only (zero egress, §5.2), consistent with the vendored-swagger-ui items above.
+**Routes** (`vdreamer.gateway`: `routes_runs`, `routes_interrupts`, `routes_artifacts`, `routes_ops`)
+- [x] `GET /agents`, `GET /agents/{name}` (mode, input JSON Schema). Role-gated agents are hidden from the list and `403 forbidden_role` on direct access.
+- [x] Threads: create (`201`), list (owner-scoped), get (history from checkpoint), soft delete. (`threads.ThreadStore` + `THREADS_DDL`; someone else's thread is a `404`, never a `403`; history is the latest checkpoint's state channels; deleting a thread with an active run is `409 run_conflict`.)
+- [x] `POST /threads/{id}/runs` → `202 {run_id}`; `GET /runs/{id}`; `POST /runs/{id}/cancel`. (Input validated against `input_schema` → `422 invalid_input`; reserved `config.configurable` keys refused; the initiator's `user_id`/`roles` and the config are stored on the row and bound into the worker's `VDreamerContext`; headless agents → `400 mode_not_supported`, D15.)
+- [x] SSE with `Last-Event-ID` replay: `GET /runs/{id}/events`, `GET /threads/{id}/events` (joins the active or latest run). (`gateway.sse`: `id: {run_id}:{seq}`, 15 s `: heartbeat` frames, `X-Accel-Buffering: no`; closes on a terminal `run.status`, stays open across `awaiting_approval`.)
+- [x] Interrupts: `GET /interrupts`, `GET /interrupts/{id}`, `POST /interrupts/{id}/resolve` (§4). (`interrupts.InterruptStore` + `INTERRUPTS_DDL`; the worker writes the §4.2 record on `interrupt.requested`; resolve checks visibility `404` → authority `403` → expiry `410` → version `409` (A12) → actions `422`, CAS-resolves, emits `interrupt.resolved`, plants the resume map and requeues; the worker turns it into `Command(resume=…)`. Milestone 8 adds `edit_schema` validation, four-eyes, the expiry sweeper, headless `reject → rejected`, and `interrupt_policies`.)
+- [x] Artifacts: `/artifacts/{id}`, `/preview`, `/raw`, `/download` (§3.4). (Routes, access rules — thread owner or `artifact:read:all` — `410 artifact_expired`, the HTML CSP, and the `artifacts.ArtifactStore` contract. `serve` wires `UnavailableArtifactStore` until the M6 MinIO writer; paged/sorted table previews, CSV/XLSX conversion and `artifact://` rewriting are M6.)
+- [x] Ops: `GET /protocol/schema.json`, `/openapi.json`, `/healthz`, `/readyz`, `/metrics`. (`protocol_schema.event_json_schema` is generated from the payload models; `/readyz` runs every backend probe — Postgres and the `LISTEN` connection under `serve` — with a 2 s budget.)
+- [x] `GET /api/v1/docs` — Swagger UI served from vendored assets at `/static/vendor/swagger-ui/` (no CDN; §5.2/A13), pointing at `/api/v1/openapi.json`. (Verified rendering in a browser: zero console errors, every request same-origin.)
+- [x] Vendored swagger-ui assets ship in the repo and are covered by the zero-egress checks. (`swagger-ui-dist` 5.33.1, sha256-pinned in `vdreamer.vendored`; `doctor --offline` fails on a missing/modified file or an external URL in the docs shell; `.gitattributes` keeps line endings from drifting the hashes.)
+- [x] The gateway is built on FastAPI (D20), pinned via `uv add fastapi` and subject to the floor/latest CI pins; the framework stays internal — vdreamer's contract is the REST/SSE protocol and OpenAPI 3.1 artifacts. (`import vdreamer` never imports FastAPI — asserted by a test. The `smoke` set now includes four API tests; verified locally on the floor pins, langchain 1.4.0 / langgraph 1.2.11.)
+- [x] FastAPI's default docs CDN is overridden: Swagger UI is served from vendored assets only (zero egress, §5.2), consistent with the vendored-swagger-ui items above. (`docs_url`/`redoc_url` disabled; the docs page runs under `script-src 'self'` and `connect-src 'self'`, with `validatorUrl: null`.)
 
 **Errors and auth**
-- [ ] Uniform error body `{error: {code, message, details?}}` with stable codes (`run_conflict`, `forbidden_role`, `artifact_expired`, …).
-- [ ] Internal auth (D13, A14):
+- [x] Uniform error body `{error: {code, message, details?}}` with stable codes (`run_conflict`, `forbidden_role`, `artifact_expired`, …). (`gateway.errors.ErrorCode`; FastAPI validation, routing 404/405 and unhandled 500s all use it; 500s never echo internals.)
+- [x] Internal auth (D13, A14) — `gateway.auth.InternalAuthMiddleware`, pure ASGI so it runs before body parsing:
   - `Bearer <internal_token>` + `X-User-Id` / `X-User-Roles`
-  - two tokens valid at once, for rotation
+  - two tokens valid at once, for rotation (`VDREAMER_INTERNAL_TOKEN` + `VDREAMER_INTERNAL_TOKEN_PREVIOUS`, constant-time compare)
   - role gating via `access_roles`
-  - the gateway binds to the internal interface only
+  - the gateway binds to the internal interface only (`--host` refuses `0.0.0.0`/`::`)
+  - (Upstream service tokens for `/trigger`, A16, land with Milestone 9.)
 
 **Metrics**
-- [ ] Prometheus: queue depth, run latency, SSE connections, model latency/tokens per alias, tool latency/errors per source, MCP health, sandbox timeouts, outbox lag.
+- [x] Prometheus: queue depth, run latency, SSE connections, model latency/tokens per alias, tool latency/errors per source, MCP health, sandbox timeouts, outbox lag. (`vdreamer.metrics`: every family is defined and exposed; queue depth, run latency (worker side, `vdreamer worker --metrics-port`) and SSE connections are recorded now, the rest by their subsystems in M5/M6/M7/M9.)
 
-**Exit:** REST contract tests (`uv run pytest tests/api`) cover every route, including auth failures and error codes; `/api/v1/docs` renders and `/api/v1/openapi.json` is valid OpenAPI 3.1, with the served HTML asserting CSP/no-CDN (no external URLs).
+**Earlier-milestone defects fixed here** (found while wiring the gateway)
+- `PostgresEventLog.write` passed a raw `dict`/`list` to psycopg, which cannot adapt a `dict` (and sends a `list` as an array, not `jsonb`), so every real-Postgres event write would have failed. Now JSON text with `::jsonb` casts, plus `NOTIFY` and a retry on a raced `seq`.
+- `PostgresRunQueue.enqueue` read the thread id as the status, so `wait_for_idle` could never succeed on Postgres; its `SKIP LOCKED` check could also skip a concurrently locked active row. A per-thread advisory lock now serializes enqueues.
+- `claim()` had no agent filter: with several agents on one database, any worker claimed any agent's run.
+- Recovered/released runs re-drove their input from the start. The worker now resumes from the run's own checkpoint (`RUN_ID_CONFIGURABLE_KEY` in the checkpoint metadata), so completed nodes no longer re-run; the M3 exit test now pins that.
+
+**Exit:** ✅ verified — `uv run pytest tests/api` green (98 passed; 5 live-Postgres tests skip without `VDREAMER_TEST_PG_DSN`) and covers every route, including auth failures and every error code; `/api/v1/openapi.json` is valid OpenAPI 3.1 (`openapi-spec-validator`) and lists exactly the §2.5 route table; `/api/v1/docs` renders from vendored assets, and its served HTML is asserted to carry the CSP and no external URL. Full suite: 377 passed, 10 skipped; ruff + mypy (strict) clean; `doctor --offline` green. Still owed: a live-Postgres run of the new stores (no Postgres on the dev host).
 
 ---
 
