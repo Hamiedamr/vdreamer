@@ -109,24 +109,25 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 **Goal:** the production run lifecycle, with Postgres as the only gateway↔worker transport (A7, D12).
 
 **Entrypoints and queue**
-- [ ] Standard console-script entrypoints (`[project.scripts]`); in the repo, developers run them via `uv run`:
-  - `vdreamer serve` (stateless gateway)
-  - `vdreamer worker`
-  - `vdreamer dev` (single process on SQLite + local filesystem store, D11)
-- [ ] Queue tables: claim via `FOR UPDATE SKIP LOCKED`, with a 10 s lease heartbeat.
-- [ ] Run states: `queued → running → (awaiting_approval → running)* → completed | failed | rejected | expired | cancelled`.
+- [x] Standard console-script entrypoints (`[project.scripts]`); in the repo, developers run them via `uv run` (`vdreamer = "vdreamer.cli:main"` wired since M0; `migrate`/`worker`/`dev` added in WP3):
+  - `vdreamer serve` (stateless gateway) — lands with Milestone 4.
+  - [x] `vdreamer worker` — one process, one agent (`--agent` with `--registry`/`--agents-dir`, D2; `--claimant`, default `worker-{hostname}-{pid}`); DSN from `VDREAMER_PG_DSN` (A23), Postgres queue + `run_events` sink, startup recovery.
+  - [x] `vdreamer dev` (single process on SQLite + local filesystem store, D11) — in-memory queue and sinks, `--input`/`--thread` smoke of the whole lifecycle, `--db` for the SQLite checkpoint file; hot reload is future work. The checkpointer is `AsyncSqliteSaver` (`langgraph-checkpoint-sqlite` is a base runtime dependency — no fallback, no warning), and the run's checkpoint persists across restarts: a fresh saver re-opened on the same `--db` file reads the final state back.
+- [x] `vdreamer migrate` — idempotent schema application: `RUNS_DDL`, `RUN_EVENTS_DDL`, and the checkpointer's own `setup()`; DSN from `VDREAMER_PG_DSN` only (A23), friendly error without psycopg.
+- [x] Queue tables: claim via `FOR UPDATE SKIP LOCKED`, with a 10 s lease heartbeat. (WP1: `RUNS_DDL`, `PostgresRunQueue` + `InMemoryRunQueue`, heartbeat at half the lease window.)
+- [x] Run states: `queued → running → (awaiting_approval → running)* → completed | failed | rejected | expired | cancelled`. (WP1: `RunState` + the transition map, enforced per-UPDATE.)
 
 **Cancel, shutdown, recovery**
-- [ ] Cancel: `POST /runs/{id}/cancel` calls `RunControl.request_drain()`, which leaves a resumable checkpoint; the run moves to `cancelled`.
-- [ ] Worker SIGTERM: drain and requeue without consuming an attempt.
-- [ ] Crash recovery: an expired lease requeues the run with `attempt+1` (max 3) and resumes from the checkpoint. The in-flight node re-executes, so side effects use `ctx.idempotency_key` (A6).
-- [ ] Node timeouts and errors (`NodeTimeoutError`, `NodeError`) map to `run.status.error`.
+- [ ] Cancel: `POST /runs/{id}/cancel` calls `RunControl.request_drain()`, which leaves a resumable checkpoint; the run moves to `cancelled`. (The worker mechanism landed in WP2 — `Worker.request_cancel` drains the local run to `cancelled` with a resumable checkpoint; the POST route is the M4 gateway.)
+- [x] Worker SIGTERM: drain and requeue without consuming an attempt. (WP2: `release` gives back the claim's attempt increment; POSIX handler install, portable `drain_all`.)
+- [x] Crash recovery: an expired lease requeues the run with `attempt+1` (max 3) and resumes from the checkpoint. The in-flight node re-executes, so side effects use `ctx.idempotency_key` (A6). (WP1's `requeue_expired` sweep + WP2's `recover_on_start`/lease-lost drain. The re-claim re-drives the row's input on the same checkpointed thread — the checkpointed state carries, and the ledger keyed on `ctx.idempotency_key` — the run id itself, stable across attempts (A6) — keeps the side effect exactly-once; planting a literal resume input on requeued rows is the M4 mechanism, same as approval resumes.)
+- [x] Node timeouts and errors (`NodeTimeoutError`, `NodeError`) map to `run.status.error`. (WP2.)
 
 **Fan-out and concurrency**
-- [ ] `LISTEN/NOTIFY {run_id, seq}` fan-out. Any gateway replica serves any SSE reconnect: replay `seq > Last-Event-ID`, then tail live.
-- [ ] One active run per thread: `409 {active_run_id, reason}` (D12, A11). `?wait_for_idle=true` queues behind `running` only.
+- [ ] `LISTEN/NOTIFY {run_id, seq}` fan-out. Any gateway replica serves any SSE reconnect: replay `seq > Last-Event-ID`, then tail live. (→ M4, with the SSE transport.)
+- [x] One active run per thread: `409 {active_run_id, reason}` (D12, A11). `?wait_for_idle=true` queues behind `running` only. (The queue guard + `wait_for_idle` landed in WP1, including the partial index behind it; the 409 render is the M4 gateway.)
 
-**Exit:** kill a worker mid-run; the run resumes from its checkpoint and the side effect runs exactly once (idempotency test with a side-effecting tool).
+**Exit:** ✅ verified — kill a worker mid-run; the run resumes from its checkpoint and the side effect runs exactly once (`tests/worker/test_recovery_idempotency.py`: worker 1 killed mid-run leaves the row claimed with a lapsing lease; the recovery sweep requeues; worker 2 — a fresh runner over the same checkpoint store — re-executes the side-effecting node, whose ledger keeps the effect exactly-once while the node itself runs twice; the run completes on attempt 2 with the pre-kill checkpointed state intact).
 
 ---
 

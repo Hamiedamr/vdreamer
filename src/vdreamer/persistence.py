@@ -30,6 +30,11 @@ Durability: TypeAlias = Literal["sync", "async"]
 #: "sync" by default: crash recovery (A6) needs every step checkpointed (A42).
 DEFAULT_DURABILITY: Final[Durability] = "sync"
 
+#: The Postgres DSN environment variable (A23): connection strings come from
+#: the environment, never YAML and never the command line. ``vdreamer worker``
+#: and ``vdreamer migrate`` resolve it here, at startup, via :func:`dsn_from_env`.
+PG_DSN_ENV_VAR: Final[str] = "VDREAMER_PG_DSN"
+
 
 class PersistenceConfigError(RuntimeError):
     """Persistence configuration is missing or unusable (A23)."""
