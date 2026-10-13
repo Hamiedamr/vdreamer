@@ -1,0 +1,221 @@
+"""The in-process run driver (PRD §2.2, §2.4, A42).
+
+``AgentRunner`` is the Milestone-1 half of the runtime contract: it builds the
+agent's graph once and caches it — "build() runs once per worker; graph cached"
+(PRD §2.2) — then drives each run with the resolved ``durability`` (A42), the
+lifecycle hooks (``on_run_start`` / ``on_run_end``), and the ``VDreamerContext``
+bound so the implicit helpers (vdreamer.context) resolve the run from any node
+or tool (PRD §2.2 line 70).
+
+The worker/queue topology — claiming runs, lease heartbeats, crash recovery,
+resume-from-checkpoint — lands in Milestone 3 and drives this same runner.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from typing import Any, Literal
+
+from langchain_core.runnables import RunnableConfig
+
+from vdreamer.agents import BaseAgent, BuildContext
+from vdreamer.context import VDreamerContext, bind_context
+from vdreamer.validate import ensure_compiled
+
+
+@dataclass(frozen=True)
+class RunInfo:
+    """What the lifecycle hooks receive (PRD §2.2).
+
+    ``status`` is the hook phase: ``on_run_start`` gets ``"running"``;
+    ``on_run_end`` gets a copy with ``"completed"`` or ``"failed"``.
+    """
+
+    run_id: str
+    thread_id: str
+    agent_name: str
+    attempt: int = 0
+    status: str = "running"
+
+
+class AgentRunner:
+    """Builds an agent's graph once, then drives runs of it in-process (PRD §2.2)."""
+
+    def __init__(
+        self,
+        agent: BaseAgent,
+        *,
+        checkpointer: Any = None,
+        store: Any = None,
+        settings: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.agent = agent
+        self._checkpointer = checkpointer
+        self._compiled: Any = None
+        self._ctx = BuildContext(
+            settings=settings if settings is not None else {},
+            models={},
+            resources={},
+            tools=None,
+            checkpointer=checkpointer,
+            store=store,
+        )
+
+    def build(self) -> Any:
+        """Build and compile the graph on the first call; cached afterwards (§2.2).
+
+        ``StateGraph`` returns compile here with the runner's checkpointer;
+        already-runnable graphs (compiled ``StateGraph``, functional-API
+        ``@entrypoint``, ``create_agent`` / ``create_deep_agent`` prebuilts)
+        pass through ``ensure_compiled`` untouched.
+        """
+        if self._compiled is None:
+            self._compiled = ensure_compiled(
+                self.agent.build(self._ctx), checkpointer=self._checkpointer
+            )
+        return self._compiled
+
+    @property
+    def compiled(self) -> Any:
+        """The cached compiled graph; ``None`` until the first ``build()``."""
+        return self._compiled
+
+    def _resolve_durability(self, durability: Literal["sync", "async"] | None) -> str:
+        """Resolve the durability for a run (A42).
+
+        An explicit argument wins, else the agent's ``durability`` attribute
+        (agents set ``durability = "async"`` to opt a whole agent in), else
+        ``"sync"`` — the default, because crash recovery (§3.2) needs every
+        step checkpointed. Anything else is a ``ValueError``.
+        """
+        resolved: str = (
+            durability if durability is not None else str(getattr(self.agent, "durability", "sync"))
+        )
+        if resolved not in ("sync", "async"):
+            raise ValueError(
+                "durability must be 'sync' or 'async' (A42: agents may set "
+                f"durability = 'async' to opt in), got {resolved!r}"
+            )
+        return resolved
+
+    def _run_info(
+        self,
+        *,
+        context: VDreamerContext | None,
+        config: RunnableConfig | None,
+    ) -> RunInfo:
+        """The ``RunInfo`` for one run — the identity the hooks receive.
+
+        ``context`` wins when given (the worker, Milestone 3, claims a queued
+        run with its ``run_id``/``thread_id``/``attempt``); otherwise fall back
+        to ``config["configurable"]``; otherwise generate ids — one execution
+        is one ``run_id`` (PRD §3.1).
+        """
+        configurable: dict[str, Any] = {}
+        if config is not None:
+            from_config = config.get("configurable")
+            if from_config is not None:
+                configurable = dict(from_config)
+        if context is not None:
+            return RunInfo(
+                run_id=context.run_id,
+                thread_id=context.thread_id,
+                agent_name=self.agent.name,
+                attempt=context.attempt,
+            )
+        return RunInfo(
+            run_id=str(configurable.get("run_id") or f"run_{uuid.uuid4().hex}"),
+            thread_id=str(configurable.get("thread_id") or f"thread_{uuid.uuid4().hex}"),
+            agent_name=self.agent.name,
+            attempt=int(configurable.get("attempt") or 0),
+        )
+
+    async def _execute(
+        self,
+        built: Any,
+        info: RunInfo,
+        input: Any,
+        config: RunnableConfig | None,
+        context: VDreamerContext | None,
+        durability: str,
+    ) -> Any:
+        """Start hook → graph → end hook, failing the run on any exception."""
+        await self.agent.on_run_start(info)
+        try:
+            # context=/durability= verified against langgraph 1.2.15: a graph
+            # without a context_schema ignores a non-None context, and
+            # durability is a per-invocation ainvoke kwarg. A42's "sync" only
+            # means anything with a checkpointer present — and 1.2.15 raises
+            # on durability="sync" without one — so the kwarg is not
+            # forwarded for a checkpointer-less runner.
+            result = await built.ainvoke(
+                input,
+                config,
+                context=context,
+                durability=durability if self._checkpointer is not None else None,
+            )
+        except Exception:
+            await self.agent.on_run_end(replace(info, status="failed"), "failed")
+            raise
+        await self.agent.on_run_end(replace(info, status="completed"), "completed")
+        return result
+
+    async def arun(
+        self,
+        input: Any,
+        *,
+        config: RunnableConfig | None = None,
+        context: VDreamerContext | None = None,
+        durability: Literal["sync", "async"] | None = None,
+    ) -> Any:
+        """Run one invocation of the agent's graph end to end.
+
+        Order of operations (PRD §2.2, A42):
+
+        1. ``build()`` — cached, so the agent's ``build(ctx)`` runs at most
+           once per runner.
+        2. Resolve durability: the explicit argument, else the agent's
+           ``durability`` attribute, else ``"sync"``; anything other than
+           ``"sync"``/``"async"`` raises ``ValueError``.
+        3. ``on_run_start(info)`` → ``ainvoke`` → ``on_run_end`` with
+           ``"completed"``, or ``"failed"`` and the exception re-raised.
+           When ``context`` is given, the whole invocation — hooks included —
+           runs inside ``bind_context(context)``, so the implicit helpers
+           resolve the run from any node or tool; without one, nothing binds
+           and the helpers raise if a node reaches for them.
+
+        ``context`` is forwarded to ``ainvoke`` whenever given — verified safe
+        on langgraph 1.2.15: a graph that declares no ``context_schema`` runs
+        unchanged, and one that does (``StateGraph(..., context_schema=...)``,
+        or ``create_agent`` wired through ``ctx.agent_kwargs()``, Milestone 1
+        follow-up) receives it as ``runtime.context`` in nodes. The resolved
+        durability is forwarded only when the runner has a checkpointer: there
+        is nothing to persist otherwise, and langgraph 1.2.15 raises on
+        ``durability="sync"`` without a checkpointer (it also warns that the
+        kwarg has no effect there).
+
+        An interrupted run (``require_approval`` → LangGraph ``GraphInterrupt``)
+        returns normally with the pending interrupt readable from
+        ``aget_state(config).interrupts``; mapping that onto
+        ``awaiting_approval`` (PRD §3.2) and resuming is the worker's job,
+        Milestone 3.
+
+        Args:
+            input: the graph input — or a ``Command(resume=...)`` continuation.
+            config: the run config; ``config["configurable"]["thread_id"]`` is
+                what keys the checkpointer.
+            context: the run identity, bound for the implicit helpers.
+            durability: per-run override of the agent's durability (A42).
+
+        Returns:
+            The graph result (``stream_mode="values"``), unchanged.
+        """
+        built = self.build()
+        resolved = self._resolve_durability(durability)
+        info = self._run_info(context=context, config=config)
+        if context is None:
+            return await self._execute(built, info, input, config, None, resolved)
+        with bind_context(context):
+            return await self._execute(built, info, input, config, context, resolved)

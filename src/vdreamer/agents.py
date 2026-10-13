@@ -1,9 +1,19 @@
 """The ``BaseAgent`` developer contract (PRD §2.2, D1, A5).
 
-Milestone 0 ships the attribute contract plus the ``build()`` hook that
-``vdreamer validate`` and the CI smoke tests exercise. The runtime half of the
-contract — ``BuildContext`` population, ``VDreamerContext``, ``agent_kwargs()``,
-run hooks, tool/interrupt policies — lands with Milestone 1 and later.
+Complete as of Milestone 1 (Developer Contract Core):
+
+- **Attributes** (§2.2): ``name``, ``mode``, ``models``, ``resources``,
+  ``input_schema``, ``expose_thinking``, ``access_roles`` — plus the
+  Milestone-1 additions ``tool_policies`` / ``interrupt_policies`` (§2.7,
+  §4.5) and ``durability`` (§2.4, A42).
+- **``build(ctx)``** returns any accepted graph (§2.4): a ``StateGraph``
+  (vdreamer compiles it), an already-compiled graph, a functional-API
+  ``@entrypoint``, or a ``create_agent`` / ``create_deep_agent`` prebuilt —
+  prebuilts get their wiring from ``ctx.agent_kwargs()``.
+- **Optional hooks** ``on_run_start`` / ``on_run_end``, fired around each
+  run by ``vdreamer.runtime.AgentRunner``.
+
+``vdreamer validate`` (validate.py) checks every piece of this contract.
 """
 
 from __future__ import annotations
@@ -14,6 +24,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pydantic
+
+from vdreamer.context import VDreamerContext
+from vdreamer.persistence import DEFAULT_DURABILITY, Durability
+from vdreamer.tools import InterruptPolicy, Policy, VDreamerToolMiddleware
 
 
 class Mode(enum.Enum):
@@ -28,11 +42,12 @@ class Mode(enum.Enum):
 class BuildContext:
     """What ``BaseAgent.build()`` receives (PRD §2.2).
 
-    A worker populates this once per agent before ``build()`` runs, then caches
-    the graph. Milestone 0 only needs an empty context for ``validate`` and the
-    smoke tests; workers start populating it in Milestone 1 (models, resources,
-    tools, checkpointer, store, settings), and ``agent_kwargs()`` arrives with
-    the prebuilt-agent support of Milestone 1.
+    A worker populates this once per agent before ``build()`` runs, then
+    caches the graph ("build() runs once per worker", §2.2). ``settings``
+    carries deployment config; ``models`` / ``resources`` are the alias
+    wiring (populated when ``models.yaml`` / ``resources.yaml`` resolution
+    lands, Milestone 7); ``tools`` / ``checkpointer`` / ``store`` are the
+    runtime wiring ``agent_kwargs()`` forwards to prebuilt agents.
     """
 
     settings: Mapping[str, Any] = field(default_factory=dict)
@@ -43,8 +58,21 @@ class BuildContext:
     store: Any = None
 
     def agent_kwargs(self) -> dict[str, Any]:
-        """``create_agent`` / ``create_deep_agent`` kwargs (PRD §2.4)."""
-        raise NotImplementedError("agent_kwargs() lands with Milestone 1")
+        """``create_agent`` / ``create_deep_agent`` kwargs (PRD §2.4).
+
+        Supplies exactly ``{checkpointer, store, context_schema:
+        VDreamerContext, middleware: [VDreamerToolMiddleware()]}`` — the
+        run-context schema (nodes read the run through ``runtime.context``)
+        plus tool-governance middleware (§2.7; pass-through until the
+        Milestone-5 pipeline) — so a prebuilt agent wires into vdreamer
+        without touching internals.
+        """
+        return {
+            "checkpointer": self.checkpointer,
+            "store": self.store,
+            "context_schema": VDreamerContext,
+            "middleware": [VDreamerToolMiddleware()],
+        }
 
 
 class BaseAgent:
@@ -62,12 +90,44 @@ class BaseAgent:
     expose_thinking: bool = True
     access_roles: Sequence[str] = ()
 
+    tool_policies: Mapping[str, Policy] = {}
+    """Tool governance policies keyed by tool name or ``fnmatch`` glob
+    (PRD §2.7), e.g. ``tool_policies = {"sql_db_*": Policy(side_effects=True)}``.
+    Class-level only: subclasses *replace* the whole mapping, so the shared
+    empty default is never mutated; resolution against a decorator's own
+    policy (per field, agent wins) is ``vdreamer.tools.resolve_policy``.
+    """
+
+    interrupt_policies: Mapping[str, InterruptPolicy] = {}
+    """HITL overrides for non-vdreamer interrupt sources (PRD §4.5, A44),
+    keyed by ``kind`` — ``"tool_review"`` | ``"mcp_elicitation"`` |
+    ``"generic"`` — or by tool name. Class-level only, replaced wholesale
+    like ``tool_policies``.
+    """
+
+    durability: Durability = DEFAULT_DURABILITY
+    """Per-superstep invocation durability (PRD §2.4, A42): ``"sync"`` by
+    default so every step is checkpointed and crash recovery (A6) resumes
+    from the last checkpoint; set ``durability = "async"`` per agent to opt
+    out. Resolved per run by ``vdreamer.runtime.AgentRunner``.
+    """
+
     def build(self, ctx: BuildContext) -> Any:
         """Return this agent's LangGraph graph (PRD §2.4). Runs once per worker."""
         raise NotImplementedError("agents must implement build(ctx)")
 
     async def on_run_start(self, run: Any) -> None:
-        """Optional lifecycle hook; wired into runs in Milestone 1."""
+        """Optional lifecycle hook (PRD §2.2), fired by ``runtime.AgentRunner``.
+
+        ``run`` is a ``RunInfo`` with ``status="running"``, before the graph
+        executes. The worker (Milestone 3) maps interrupts onto
+        ``awaiting_approval`` between these hooks.
+        """
 
     async def on_run_end(self, run: Any, status: str) -> None:
-        """Optional lifecycle hook; wired into runs in Milestone 1."""
+        """Optional lifecycle hook (PRD §2.2), fired by ``runtime.AgentRunner``.
+
+        ``status`` is ``"completed"``, or ``"failed"`` with the exception
+        already re-raised to the caller; ``run`` is the same ``RunInfo``
+        with matching ``status``.
+        """

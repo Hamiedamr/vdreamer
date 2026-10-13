@@ -1,9 +1,12 @@
 """``vdreamer`` CLI (PRD §2.3).
 
 Milestone 0 surface: ``--version``, ``validate``, ``doctor --offline`` — the
-pieces the CI matrix depends on. ``dev``/``serve``/``worker`` land with
-Milestone 3, ``run`` with Milestone 11, and ``migrate``/``export-schema``/
-``bundle`` with Milestone 10.
+pieces the CI matrix depends on. Milestone 1 wires the D2 discovery flags into
+``validate``: ``--registry PATH`` / ``--agents-dir PATH`` resolve a bare agent
+name (``vdreamer.discovery.resolve_agent``), while a ``pkg.module:agent`` spec
+stays explicit and wins. ``dev``/``serve``/``worker`` (with their own registry/
+agents-dir flags) land with Milestone 3, ``run`` with Milestone 11, and
+``migrate``/``export-schema``/``bundle`` with Milestone 10.
 """
 
 from __future__ import annotations
@@ -27,10 +30,27 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser = subparsers.add_parser(
         "validate",
         help="validate an agent against the vdreamer contract",
-        description="Load 'pkg.module:agent' and run the developer-contract checks.",
+        description=(
+            "Load 'pkg.module:agent' (or resolve a bare name via --registry / --agents-dir, D2) "
+            "and run the developer-contract checks."
+        ),
     )
     validate_parser.add_argument(
-        "agent", metavar="pkg.module:agent", help="agent spec (module path and attribute)"
+        "agent",
+        metavar="pkg.module:agent",
+        help="agent spec (module path and attribute), or a bare name with --registry/--agents-dir",
+    )
+    validate_parser.add_argument(
+        "--registry",
+        metavar="PATH",
+        default=None,
+        help="path to a vdreamer.yaml registry mapping names to import specs (D2)",
+    )
+    validate_parser.add_argument(
+        "--agents-dir",
+        metavar="PATH",
+        default=None,
+        help="flat directory of agent modules to resolve bare names against (D2)",
     )
 
     doctor_parser = subparsers.add_parser(
@@ -52,7 +72,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "validate":
         from vdreamer.validate import run_validate
 
-        return run_validate(args.agent)
+        return run_validate(args.agent, registry=args.registry, agents_dir=args.agents_dir)
 
     if args.command == "doctor":
         if not args.offline:

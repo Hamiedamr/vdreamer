@@ -54,25 +54,25 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 **Goal:** the `BaseAgent` developer contract (D1, D2, §2.2), the surface every agent author codes against.
 
 **`BaseAgent` and build lifecycle**
-- [ ] `BaseAgent` attributes: `name`, `mode` (CHAT|HEADLESS|BOTH), `models`, `resources`, `input_schema`, `expose_thinking`, `access_roles`.
-- [ ] `build(ctx: BuildContext)` runs once per worker; the graph is cached.
-- [ ] `BuildContext`: `models`, `resources`, `tools`, `checkpointer`, `store`, `settings`, `agent_kwargs()`.
-- [ ] `agent_kwargs()` supplies `{checkpointer, store, context_schema=VDreamerContext, middleware=[VDreamerToolMiddleware()]}` for `create_agent` / `create_deep_agent`.
-- [ ] Optional hooks: `on_run_start`, `on_run_end`.
-- [ ] Accepted graph returns: `StateGraph`, compiled graphs, functional-API `@entrypoint`, `create_agent`, `create_deep_agent`. vdreamer compiles where needed (§2.4).
+- [x] `BaseAgent` attributes: `name`, `mode` (CHAT|HEADLESS|BOTH), `models`, `resources`, `input_schema`, `expose_thinking`, `access_roles`.
+- [x] `build(ctx: BuildContext)` runs once per worker; the graph is cached. (`vdreamer.runtime.AgentRunner.build()`.)
+- [x] `BuildContext`: `models`, `resources`, `tools`, `checkpointer`, `store`, `settings`, `agent_kwargs()`.
+- [x] `agent_kwargs()` supplies `{checkpointer, store, context_schema=VDreamerContext, middleware=[VDreamerToolMiddleware()]}` for `create_agent` / `create_deep_agent`.
+- [x] Optional hooks: `on_run_start`, `on_run_end`. (Fired by `runtime.AgentRunner` with `status="running"` / `"completed"|"failed"`; the worker maps interrupts onto `awaiting_approval` in M3.)
+- [x] Accepted graph returns: `StateGraph`, compiled graphs, functional-API `@entrypoint`, `create_agent`, `create_deep_agent`. vdreamer compiles where needed (§2.4). (`validate.ensure_compiled`; the pass-through list is its docstring.)
 
 **Runtime context and helpers**
-- [ ] `VDreamerContext` run context, with context-variable resolution so the implicit helpers (`emit_artifact`, `emit_citation`, `emit_progress`, `emit_log`, `require_approval`) work in any node or tool without parameters.
+- [x] `VDreamerContext` run context, with context-variable resolution so the implicit helpers (`emit_artifact`, `emit_citation`, `emit_progress`, `emit_log`, `require_approval`) work in any node or tool without parameters. (Helpers buffer into `ctx.pending`; the worker event pipeline that drains it lands in M2. Per-kind artifact data validation and MinIO writes land in M6.)
 
 **Tools and policies**
-- [ ] `vdreamer.tool` decorator: `@tool` plus policy metadata (`redact`, `timeout_s`, `side_effects`, `approval`) stored in `tool.metadata["vdreamer"]` (A37).
-- [ ] `tool_policies` / `interrupt_policies` on `BaseAgent`, keyed by name or glob.
+- [x] `vdreamer.tool` decorator: `@tool` plus policy metadata (`redact`, `timeout_s`, `side_effects`, `approval`) stored in `tool.metadata["vdreamer"]` (A37). (`VDreamerToolMiddleware` is a pass-through; the 7-step governance pipeline and `ctx.tools.govern` land in M5, the approval gate in M8.)
+- [x] `tool_policies` / `interrupt_policies` on `BaseAgent`, keyed by name or glob. (Enforcement of interrupt normalization for non-vdreamer sources lands in M8.)
 
 **Discovery and persistence**
-- [ ] Agent discovery: `pkg.module:agent`, `--agents-dir`, or a `vdreamer.yaml` registry (D2).
-- [ ] Persistence: `AsyncPostgresSaver` with `durability="sync"` by default and a per-agent `async` opt-in (A42, A6).
+- [x] Agent discovery: `pkg.module:agent`, `--agents-dir`, or a `vdreamer.yaml` registry (D2). (`validate --registry` / `--agents-dir` landed; `serve`/`worker` flags land in M3.)
+- [x] Persistence: `AsyncPostgresSaver` with `durability="sync"` by default and a per-agent `async` opt-in (A42, A6). (`persistence.open_checkpointer` factory + `durability_for`; worker queue/lease/resume wiring lands in M3.)
 
-**Exit:** a trivial in-repo test agent builds, compiles, and runs a single node through the checkpointer (`uv run pytest tests/contract`).
+**Exit:** ✅ verified — `uv run pytest tests/contract` green (85 passed): a trivial in-repo agent (`tests/contract/test_milestone1_exit.py`) builds, compiles, and runs a single node through the checkpointer, fires the hooks, resolves helpers via the runner-bound contextvar, carries the §2.4 `agent_kwargs()` wiring, and passes every `validate_agent` check.
 
 ---
 

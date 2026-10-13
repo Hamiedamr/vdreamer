@@ -1,27 +1,40 @@
 """``vdreamer validate`` — developer-contract checks (PRD §2.3).
 
-Milestone 0 scope: load the agent, check the attribute contract (PRD §2.2),
-build the graph and compile it (PRD §2.4). Alias resolution and model-file
-probes (Milestone 7), approval-route wiring (Milestone 8), and checkpointer /
-governed-tool checks (Milestones 1, 5) extend this module as they land.
+Milestone 0 loaded the agent, checked the attribute contract (PRD §2.2), and
+built and compiled the graph (PRD §2.4). Milestone 1 adds the new-contract
+checks — ``tool_policies`` / ``interrupt_policies`` shape (§2.7, §4.5),
+per-agent ``durability`` (§2.4, A42), and the ``agent_kwargs()`` wiring
+proof — plus the D2 discovery flags on the CLI: ``--registry`` /
+``--agents-dir`` resolve a bare name through
+``vdreamer.discovery.resolve_agent``, while a ``pkg.module:agent`` spec stays
+explicit (it short-circuits inside ``resolve_agent``). Alias resolution and
+model-file probes (Milestone 7) and approval-route wiring (Milestone 8)
+extend this module as they land.
 """
 
 from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pydantic
 from langgraph.graph import StateGraph
 
 from vdreamer.agents import BaseAgent, BuildContext, Mode
-from vdreamer.discovery import AgentLoadError, load_agent
+from vdreamer.context import VDreamerContext
+from vdreamer.discovery import AgentLoadError, resolve_agent
+from vdreamer.persistence import DEFAULT_DURABILITY
+from vdreamer.tools import InterruptPolicy, Policy, VDreamerToolMiddleware
 
 #: Agent name == route segment (PRD §2.5): a lowercase slug.
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+#: The exact ``BuildContext.agent_kwargs()`` key set (PRD §2.4).
+_AGENT_KWARGS_KEYS: tuple[str, ...] = ("checkpointer", "store", "context_schema", "middleware")
 
 
 @dataclass(frozen=True)
@@ -97,8 +110,93 @@ def _check_graph(agent: BaseAgent) -> Check:
     return Check("graph.build", True, type(compiled).__module__ + "." + type(compiled).__qualname__)
 
 
+def _check_policy_mapping(
+    label: str,
+    value: Any,
+    policy_cls: type[Policy] | type[InterruptPolicy],
+) -> Check:
+    """``tool_policies`` / ``interrupt_policies`` shape (PRD §2.7, §4.5).
+
+    Class-level mappings keyed by tool name or ``fnmatch`` glob: keys must be
+    non-empty strings (glob *syntax* is not pre-validated) and values
+    ``policy_cls`` instances — the common mistake is a raw metadata dict
+    where a policy object belongs, so the failure names the offender.
+    """
+    if not isinstance(value, Mapping):
+        return Check(
+            label,
+            False,
+            f"expected a mapping of name/glob to {policy_cls.__name__}, got {type(value).__name__}",
+        )
+    bad_keys = [key for key in value if not isinstance(key, str) or not key]
+    if bad_keys:
+        return Check(
+            label,
+            False,
+            f"keys must be non-empty strings (name or fnmatch glob): {bad_keys!r}",
+        )
+    bad = [(key, pol) for key, pol in value.items() if not isinstance(pol, policy_cls)]
+    if bad:
+        key, offender = bad[0]
+        return Check(
+            label,
+            False,
+            f"{key!r} -> {offender!r}: values must be {policy_cls.__name__} instances",
+        )
+    return Check(label, True, ", ".join(str(key) for key in value) if value else "(none)")
+
+
+def _check_durability(agent: BaseAgent) -> Check:
+    """``durability`` must be ``"sync"`` or ``"async"`` (PRD §2.4, A42)."""
+    value = getattr(agent, "durability", DEFAULT_DURABILITY)
+    if value in ("sync", "async"):
+        return Check("durability", True, str(value))
+    return Check(
+        "durability",
+        False,
+        "durability must be 'sync' or 'async' (A42: 'sync' by default so every step is "
+        f"checkpointed; set durability = 'async' per agent to opt out), got {value!r}",
+    )
+
+
+def _check_agent_kwargs() -> Check:
+    """Cheap wiring proof for ``BuildContext.agent_kwargs()`` (PRD §2.4).
+
+    Calls it on an empty ``BuildContext`` and asserts the exact key set with
+    ``context_schema=VDreamerContext`` and a ``VDreamerToolMiddleware`` in
+    ``middleware`` — proving the prebuilt-agent path without importing
+    ``create_agent`` or a model server.
+    """
+    try:
+        kwargs = BuildContext().agent_kwargs()
+    except Exception as exc:  # a broken override is a failed check, not a crash
+        return Check("agent_kwargs", False, f"{type(exc).__name__}: {exc}")
+    if not isinstance(kwargs, dict) or set(kwargs) != set(_AGENT_KWARGS_KEYS):
+        shape = sorted(kwargs) if isinstance(kwargs, dict) else type(kwargs).__name__
+        return Check(
+            "agent_kwargs", False, f"expected exactly {sorted(_AGENT_KWARGS_KEYS)}, got {shape}"
+        )
+    if kwargs["context_schema"] is not VDreamerContext:
+        return Check(
+            "agent_kwargs",
+            False,
+            f"context_schema must be VDreamerContext, got {kwargs['context_schema']!r}",
+        )
+    middleware = kwargs["middleware"]
+    has_middleware = isinstance(middleware, list) and any(
+        isinstance(m, VDreamerToolMiddleware) for m in middleware
+    )
+    if not has_middleware:
+        return Check(
+            "agent_kwargs",
+            False,
+            "middleware must be a list containing a VDreamerToolMiddleware instance",
+        )
+    return Check("agent_kwargs", True, ", ".join(sorted(_AGENT_KWARGS_KEYS)))
+
+
 def validate_agent(agent: BaseAgent) -> list[Check]:
-    """Run the Milestone-0 contract checks against one agent."""
+    """Run the developer-contract checks (Milestones 0+1) against one agent."""
     name = getattr(agent, "name", "")
     checks = [
         Check(
@@ -121,15 +219,29 @@ def validate_agent(agent: BaseAgent) -> list[Check]:
             repr(agent.expose_thinking),
         ),
         _check_graph(agent),
+        _check_policy_mapping("tool_policies", agent.tool_policies, Policy),
+        _check_policy_mapping("interrupt_policies", agent.interrupt_policies, InterruptPolicy),
+        _check_durability(agent),
+        _check_agent_kwargs(),
     ]
     return checks
 
 
-def run_validate(spec: str) -> int:
-    """CLI entry point for ``vdreamer validate``. 0 = valid, 1 = invalid."""
+def run_validate(
+    spec: str,
+    *,
+    registry: str | Path | None = None,
+    agents_dir: str | Path | None = None,
+) -> int:
+    """CLI entry point for ``vdreamer validate``. 0 = valid, 1 = invalid.
+
+    ``spec`` is a ``pkg.module:agent`` spec (explicit — ``registry`` and
+    ``agents_dir`` are ignored), or a bare name resolved D2-style through
+    ``vdreamer.discovery.resolve_agent``: registry first, then agents dir.
+    """
     try:
-        agent = load_agent(spec)
-    except AgentLoadError as exc:
+        agent = resolve_agent(spec, registry=registry, agents_dir=agents_dir)
+    except AgentLoadError as exc:  # RegistryError subclasses AgentLoadError
         print(f"validate: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # agent code raised while importing; surface it, don't crash
