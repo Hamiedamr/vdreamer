@@ -5,7 +5,8 @@ __pycache__/
 build/
 dist/
 .agents/
-
+.opencode
+docs/
 # Environments (uv creates .venv/; the plain-pip CI job uses .venv-pip/)
 .venv/
 .venv-pip/
