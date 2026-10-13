@@ -1,6 +1,6 @@
 # `vdreamer`: LangGraph Agent Serving Toolkit Milestones
 
-This file is derived from `docs/PRD.md` (Draft v3, protocol_version 1.0).
+This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 
 - Milestones are sequential, and each one lists its exit criteria.
 - P1 capabilities are explicitly deferred (§7.1).
@@ -15,35 +15,37 @@ This file is derived from `docs/PRD.md` (Draft v3, protocol_version 1.0).
 **Goal:** a buildable, testable Python package skeleton. The repo is developed with uv, the package is installable without it, and the version pins (A41) are enforced from day one.
 
 **Project definition**
-- [ ] `uv init --lib vdreamer` produces a standard PEP 621 `pyproject.toml` with `requires-python = ">=3.11"` and a standard build backend (e.g., hatchling), so `pip install vdreamer` works without uv.
-- [ ] `.python-version` pins the CI/dev interpreter (3.11).
-- [ ] Optional extras under `[project.optional-dependencies]`: `postgres`, `minio`, `fastembed`, `qdrant`, `neo4j`, `mcp` (`langchain[mcp]`), `sandbox`.
-- [ ] Runtime pins, added with `uv add`: `langchain>=1.4,<2` (needed for `langchain.mcp`), `langgraph>=1.2,<2`, `langgraph-checkpoint-postgres`.
-- [ ] Dev tooling in a `[dependency-groups] dev` group, added with `uv add --dev`: pytest, pytest-asyncio, ruff, a type checker, and the golden-event harness deps.
+- [x] `uv init --lib vdreamer` produces a standard PEP 621 `pyproject.toml` with `requires-python = ">=3.11"` and a standard build backend (hatchling), so `pip install vdreamer` works without uv.
+- [x] `.python-version` pins the CI/dev interpreter (3.11).
+- [x] Optional extras under `[project.optional-dependencies]`: `postgres`, `minio`, `fastembed`, `qdrant`, `neo4j`, `mcp` (`langchain[mcp]`), `sandbox`.
+- [x] Runtime pins, added with `uv add`: `langchain>=1.4,<2` (needed for `langchain.mcp`), `langgraph>=1.2,<2`, `langgraph-checkpoint-postgres`.
+- [x] Dev tooling in a `[dependency-groups] dev` group, added with `uv add --dev`: pytest, pytest-asyncio, ruff, mypy. Golden-event harness deps deferred to Milestone 2, when the harness exists (noted in `pyproject.toml`).
 
 **Lockfile and commands**
-- [ ] `uv.lock` is committed and is the single source of truth. CI fails on drift via `uv sync --locked` / `uv lock --check`.
-- [ ] Standard dev commands, recorded in `AGENTS.md` for humans and coding agents:
-  - `uv sync --all-extras` (dev env)
-  - `uv run pytest`
-  - `uv run ruff check`
+- [x] `uv.lock` is committed and is the single source of truth. CI fails on drift via `uv lock --check` (plus a clean `uv sync --locked --extra postgres` step).
+- [x] Standard dev commands, recorded in `AGENTS.md` for humans and coding agents:
+  - `uv sync --locked --all-extras` (dev env)
+  - `uv run pytest` (`-m smoke` is the floor/latest subset)
+  - `uv run ruff check .` (`.agents/` excluded — installed skills are reference material)
+  - `uv run mypy` (strict)
   - `uv run vdreamer …`
 
 **CI dependency matrix (A41)**, as three jobs:
-- [ ] **locked:** `uv sync --locked --all-extras` → tests.
-- [ ] **floor:** `uv lock --resolution lowest-direct` (not committed) → `uv sync --all-extras` → reference-agent smoke tests against the minimum `langchain`/`langgraph` versions.
-- [ ] **latest:** `uv lock --upgrade` (not committed) → `uv sync --all-extras` → smoke tests against the latest 1.x minor.
+- [x] **locked:** `uv lock --check` → `uv sync --locked --all-extras` → ruff + mypy + tests.
+- [x] **floor:** `uv lock --resolution lowest-direct` (not committed) → `uv sync --frozen --all-extras` → smoke tests against the minimum `langchain`/`langgraph` versions (verified locally: langchain 1.4.0 / langgraph 1.2.11).
+- [x] **latest:** `uv lock --upgrade` (not committed) → `uv sync --frozen --all-extras` → smoke tests against the latest 1.x minor.
+- Note: floor/latest sync with `--frozen` — a plain `uv sync` after `uv lock --resolution lowest-direct` silently re-resolves to highest.
 
 **uv-independence check (product scope)**
-- [ ] CI job builds the wheel with `uv build`, then installs it into a clean `python -m venv` using plain `pip` (no uv on PATH), and runs `vdreamer --version` and `vdreamer validate` on a sample agent. This proves vdreamer has no runtime dependency on uv.
+- [x] CI job builds the wheel with `uv build`, then installs it into a clean `python -m venv` using plain `pip` (no uv on PATH), and runs `vdreamer --version` and `vdreamer validate` on a sample agent (`examples/smoke/pinger.py` until UC1–UC3 land in Milestone 12). Verified locally end-to-end.
 
 **Zero-egress CI and housekeeping**
-- [ ] CI job runs `uv run --frozen --offline vdreamer doctor --offline` with egress blocked, asserting zero egress (§5.2).
-- [ ] CI sets `UV_PYTHON_DOWNLOADS=never` so the dev toolchain never fetches interpreters in blocked-egress jobs.
-- [ ] `.gitignore`: `.venv/`, `docs/.PRD.md.un~` (vim undo artifact).
-- [ ] Record the build/test commands in `AGENTS.md` once tooling lands.
+- [x] CI job runs `uv run --frozen --offline vdreamer doctor --offline`, asserting zero egress via an in-process socket guard (§5.2; the VM network policy stays the authoritative control per A40). Verified locally.
+- [x] CI sets `UV_PYTHON_DOWNLOADS=never` so the dev toolchain never fetches interpreters in blocked-egress jobs.
+- [x] `.gitignore`: `.venv/`, `docs/.PRD.md.un~` (vim undo artifact).
+- [x] Record the build/test commands in `AGENTS.md` once tooling lands. (Done; also updated the repo-state section.)
 
-**Exit:** `uv sync --locked --extra postgres` works on a clean checkout; the plain-`pip` install job passes; CI is green on the locked, floor, and latest jobs.
+**Exit:** ✅ `uv sync --locked --extra postgres` works on a clean checkout (verified); the plain-`pip` install job passes (verified locally; CI job is `.github/workflows/ci.yml:uv-independence`); locked/floor/latest all verified locally, CI runs on push.
 
 ---
 
@@ -299,7 +301,7 @@ This file is derived from `docs/PRD.md` (Draft v3, protocol_version 1.0).
 **Goal:** the complete CLI surface and the air-gap deliverables (§2.3, §5.2–§5.3). Operators use standard pip; uv appears only in the dev-side release pipeline.
 
 **CLI commands**
-- [ ] `dev` (hot reload), `serve`, `worker`, `validate`, `migrate`, `export-schema`, `doctor --offline`, `bundle`.
+- [ ] `dev` (hot reload), `serve`, `worker`, `run` (Milestone 11), `validate`, `migrate`, `export-schema`, `doctor --offline`, `bundle`.
 - [ ] `validate`: aliases resolve; headless agents declare `input_schema` and interrupt `approver_role` (A16); approval routes wired; vdreamer checkpointer used; no ungoverned tools.
 - [ ] `migrate`: vdreamer schema plus checkpointer/store setup.
 - [ ] `export-schema`: OpenAPI 3.1, event JSON Schema, input schemas, TS types.
@@ -330,26 +332,39 @@ This file is derived from `docs/PRD.md` (Draft v3, protocol_version 1.0).
 
 ---
 
-## Milestone 11: Frontend Client SDK
+## Milestone 11: Protocol Contract & Developer Client
 
-**Goal:** `@vdreamer/client` + `@vdreamer/angular` (§6, P0 scope). This is npm-managed; uv does not apply.
+**Goal:** everything client teams and AI developers need without vdreamer shipping any frontend code (PRD §6, A45). No npm packages and no Angular.
 
-**Client library**
-- [ ] Types generated from `uv run vdreamer export-schema`; `X-Protocol-Version: 1`; a major mismatch is an error.
-- [ ] `streamRun(runId)` / `attachThread(threadId)`: fetch-based SSE, backoff + jitter reconnect via `Last-Event-ID`, returning `Observable<VDreamerEvent>`.
-- [ ] `RunReducer`: pure fold → `{status, messages, toolCalls, artifacts, interrupts, progress, logs}`, deduplicated by `seq`.
-- [ ] Forward compatibility: unknown event types are ignored; unknown kinds/renderers fall back to download.
+**Protocol contract**
+- [ ] `export-schema` emits OpenAPI 3.1, the event JSON Schema, per-agent input schemas, and generated TS types.
+- [ ] Each release attaches these artifacts.
+- [ ] Document the normative client behavior from §6.1:
+  - protocol-version check
+  - fetch-based SSE with `Last-Event-ID` reconnect
+  - dedup by `seq`
+  - ignore unknown event types; treat unknown kinds as downloads
+  - the reference fold into run state
+- [ ] Document the interrupt handling obligations from §6.4.
+- [ ] Document the Web Backend proxy requirements from §6.2.
 
-**Web Backend proxy contract (A25)**
-- [ ] Passes through `/api/v1/**` with the internal token and identity headers.
-- [ ] No SSE buffering; idle timeout > 2× heartbeat; forwards `Last-Event-ID`.
-- [ ] Artifact URLs are same-origin.
+**Conformance kit**
+- [ ] Recorded SSE streams, each paired with the expected client state, covering:
+  - chat
+  - mid-run reconnect
+  - tool overflow
+  - all four interrupt sources
+  - artifacts
+  - citations
+- [ ] A Python reference fold (test-only, not a shipped SDK) proves every recording produces its expected state.
 
-**Docs and release**
-- [ ] Document the rendering conventions and interrupt UI contracts: renderer registry, `interrupt.kind` UI, `decisions[]`, `expected_version` refresh on 409.
-- [ ] Ship as npm tarballs in the internal registry.
+**`vdreamer run <agent>` terminal client**
+- [ ] Starts a run and pretty-prints events (tokens, thinking, tool calls, artifacts, citations).
+- [ ] Prompts inline to resolve interrupts.
+- [ ] Reattaches to a thread after interruption.
+- [ ] Talks to the REST API only, so it exercises the same contract clients use.
 
-**Exit:** an Angular test harness consumes an end-to-end run, including interrupt resolution and artifact rendering.
+**Exit:** the conformance kit passes against the Python reference fold. An AI developer can run UC1–UC3 end-to-end, including approvals, using only `vdreamer run`.
 
 ---
 
@@ -389,7 +404,6 @@ Per §7.1:
 - Time-travel API
 - MCP `forward` identity
 - Legacy SSE MCP transport
-- Reference Angular components
 
 ---
 
@@ -398,10 +412,11 @@ Per §7.1:
 1. **Core = generic primitives only.** A capability enters core only if ≥2 reference agents need it and it can't be built on existing primitives (PRD design rule).
 2. **Never reimplement LangGraph primitives.** Persistence, store, HITL, run control, and node timeouts come from upstream (§2.4).
 3. **All streaming specifics stay in the one adapter module** (A31). v2 and v3 must keep passing the golden-event suite.
-4. **Protocol version stays `1.0`.** Envelope `"v"` + `X-Protocol-Version`; clients ignore unknown event types (§6.1).
+4. **Protocol version stays `1.0`.** Envelope `"v"` + `X-Protocol-Version`; clients ignore unknown event types (§6.1). Any protocol change updates the conformance kit in the same PR.
 5. **Zero egress is mandatory.** Every new dependency, endpoint, or vendored asset must pass `doctor --offline` in blocked-egress CI (§5.2).
 6. **A 2.0 of `langchain`/`langgraph` means a vdreamer major** (A41). Minors are tracked, never silently absorbed.
 7. **Sandbox features are Unix-only** (D19). Develop on Windows, exercise on Linux CI (§5.1 reference topology).
 8. **uv is the dev toolchain, not a product dependency.**
    - In the repo, developers and coding agents make dependency changes only through `uv add`/`uv remove`, keep `uv.lock` committed, and run everything via `uv run`. No `pip install` into the dev env, hand-edited `requirements*.txt`, or `setup.py`.
    - vdreamer's runtime code, CLI, `bundle` output, and install instructions must never import, invoke, or require uv. The plain-pip CI job enforces this.
+9. **No frontend code.** No Angular, UI components, or client SDKs in this repo. Client teams build against the protocol contract (§6).

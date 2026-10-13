@@ -1,14 +1,16 @@
 # PRD: LangGraph Agent Serving VDreamer (`vdreamer`)
 
-`protocol_version: 1.0` · Draft v3 · Refs: D1–D19, A1–A23 (discovery); A24–A44 new (§7.4).
+`protocol_version: 1.0` · Draft v4 · Refs: D1–D19, A1–A23 (discovery); A24–A45 new (§7.4).
 
 ---
 
 ## 1. System Summary
 
-**Problem.** Each LangGraph agent behind an enterprise SPA re-implements REST/SSE, reconnects, sessions, HITL, artifacts, triggers, tools, and model wiring, inconsistently and fragilely.
+**Problem.** Each LangGraph agent re-implements REST/SSE, reconnects, sessions, HITL, artifacts, triggers, tools, and model wiring, inconsistently and fragilely.
 
 **Product.** A Python SDK + CLI serving `BaseAgent` implementations as a production REST/SSE API with zero server code (D1), fully compatible with LangChain/LangGraph 1.x.
+
+**Users.** AI developers only. No frontend code ships; client apps integrate via the protocol contract (§6).
 
 **Design rule.** Core ships generic primitives only; domain logic (retrieval, SQL semantics, validation rules) lives in agent code. A capability enters core only if ≥2 reference agents need it and it can't be built cleanly on existing primitives.
 
@@ -66,7 +68,7 @@ class SiteValidator(BaseAgent):
 
 - **`BuildContext`:** `models`, `resources`, `tools` (§2.7), `checkpointer`, `store`, `settings`, `agent_kwargs()`.
 - **Runtime helpers** (`emit_artifact`, `emit_citation`, `emit_progress`, `emit_log`, `require_approval`, `ctx.sandbox`, `ctx.files`, `ctx.idempotency_key`) resolve the current run via context variables and work in any node or tool without parameters.
-- **Lifecycle:** `build()` runs once per worker; the graph is cached.
+- **Lifecycle:** `build()` runs once per worker; graph cached.
 - **Discovery** (D2): `vdreamer serve pkg.module:agent`, `--agents-dir ./agents`, or a `vdreamer.yaml` registry.
 
 ### 2.3 CLI
@@ -74,9 +76,10 @@ class SiteValidator(BaseAgent):
 | Command | Function |
 |---|---|
 | `dev` · `serve` · `worker` | Single-process hot reload · gateway · worker |
+| `run <agent>` | Terminal client: starts a run, pretty-prints events, resolves interrupts inline (A45) |
 | `validate` | Aliases resolve; headless agents declare `input_schema` and interrupt `approver_role` (A16); approval routes wired; vdreamer checkpointer used; no ungoverned tools |
 | `migrate` | VDreamer schema plus checkpointer/store setup |
-| `export-schema` | OpenAPI 3.1, event JSON Schema, input schemas, TS types |
+| `export-schema` | OpenAPI 3.1, event JSON Schema, input schemas, TS types, conformance kit (§6.1) |
 | `doctor --offline` | Probes all backends, model files, MCP servers, sandbox; prints LangChain/LangGraph versions; asserts zero egress |
 | `bundle` | Offline wheelhouse and model cache (§5.3) |
 
@@ -84,7 +87,7 @@ class SiteValidator(BaseAgent):
 
 **Baseline:** `langchain>=1.4,<2` (needed by `langchain.mcp`), `langgraph>=1.2,<2` (v3 event streaming, node timeouts, `RunControl`, stream transformers), `langgraph-checkpoint-postgres`, Python ≥3.11. Both are LTS 1.x lines under semver. CI runs the reference agents against the pinned floor and the latest 1.x minor (A41).
 
-**Accepted graphs.** `build()` may return a `StateGraph` (the vdreamer compiles it), any compiled graph, a functional-API `@entrypoint`, `create_agent(...)`, or `create_deep_agent(...)`. For prebuilt agents, `ctx.agent_kwargs()` supplies `{checkpointer, store, context_schema=VDreamerContext, middleware=[VDreamerToolMiddleware()]}`.
+**Accepted graphs.** `build()` may return a `StateGraph` (vdreamer compiles it), any compiled graph, a functional-API `@entrypoint`, `create_agent(...)`, or `create_deep_agent(...)`. For prebuilt agents, `ctx.agent_kwargs()` supplies `{checkpointer, store, context_schema=VDreamerContext, middleware=[VDreamerToolMiddleware()]}`.
 
 **Native primitives used, never reimplemented:**
 
@@ -120,21 +123,21 @@ class SiteValidator(BaseAgent):
 | `GET /artifacts/{id}` · `/preview` · `/raw` · `/download` | §3.4 |
 | `GET /protocol/schema.json` · `/openapi.json` · `/healthz` · `/readyz` · `/metrics` | Contracts, ops |
 
-All errors use one body, `{error: {code, message, details?}}`, with stable string codes (e.g., `run_conflict`, `forbidden_role`, `artifact_expired`).
+Errors share one body, `{error: {code, message, details?}}`, with stable codes (e.g., `run_conflict`).
 
 ### 2.6 Inter-service Boundaries
 
-- **Browser:** Angular → Web Backend → gateway with `Bearer <internal_token>` + `X-User-Id`/`X-User-Roles` (D13); token checked first, two valid for rotation (A14). Upstream services use service tokens (A16).
+- **Clients:** client app → Web Backend → gateway with `Bearer <internal_token>` + `X-User-Id`/`X-User-Roles` (D13); token checked first, two valid for rotation (A14). Upstream services use service tokens (A16).
 - **Gateway ↔ worker:** Postgres only (queue rows, `LISTEN/NOTIFY` `{run_id, seq}`, A7). Only workers reach models, MinIO writes, and resources.
 
 ### 2.7 Tool Integration (A37–A40)
 
-**One type.** Every tool, whatever its source, is a LangChain `BaseTool`. The vdreamer adds no base class of its own, so tools stay portable to plain LangChain code.
+**One type.** Every tool, whatever its source, is a LangChain `BaseTool`. vdreamer adds no base class, so tools stay portable to plain LangChain code.
 
 | Source | How developers provide it |
 |---|---|
 | Custom | Plain `@tool` works unchanged. `@vdreamer.tool(redact=[…], timeout_s=…, side_effects=True, approval=…)` is `@tool` plus policy stored in `tool.metadata["vdreamer"]`. |
-| LangChain ecosystem | Any `BaseTool` or vdreamer, passed as-is. Policies are attached by name or glob via `BaseAgent.tool_policies = {"sql_db_*": Policy(redact=["query"], side_effects=True)}`. |
+| LangChain ecosystem | Any `BaseTool` or LangChain toolkit, passed as-is. Policies are attached by name or glob via `BaseAgent.tool_policies = {"sql_db_*": Policy(redact=["query"], side_effects=True)}`. |
 | Internal MCP | Declared in `resources.yaml` (`type: mcp`). Discovered tools are named `{server}_{tool}` and selected with `ctx.tools.mcp("netinv", include=[…])`. |
 
 **Runtime access in custom tools:** either a native `runtime: ToolRuntime[VDreamerContext]` parameter (`context` holds run, thread, user, roles, `idempotency_key`; plus `state`, `stream_writer`, `tool_call_id`), or the implicit helpers called directly.
@@ -336,7 +339,7 @@ Policy fields (`approver_role`, `scope`, TTL) can be attached to non-vdreamer so
 
 | Segment | Hosts | Inbound from |
 |---|---|---|
-| VM-WEB | Angular + Web Backend (LDAP) | Users |
+| VM-WEB | Client app + Web Backend (LDAP), outside vdreamer | Users |
 | VM-GW | Gateway | VM-WEB, upstream triggers |
 | VM-WRK | Workers, sandbox, fastembed models | none |
 | VM-LLM | vLLM/Ollama | VM-WRK |
@@ -357,7 +360,7 @@ Internal DNS only, with no default route. The gateway binds to the internal inte
 - **Python:** pins `langchain>=1.4,<2` and `langgraph>=1.2,<2` (A41). `vdreamer bundle` → `wheelhouse/` + hashed lock; `pip install --no-index --find-links`. Extras: `[postgres]`, `[minio]`, `[fastembed]`, `[qdrant]`, `[neo4j]`, `[mcp]` (`langchain[mcp]`), `[sandbox]`.
 - **Models:** `vdreamer bundle --models` pre-fetches fastembed aliases on a connected build host; ship baked into the image or as a read-only volume.
 - **OCI:** `vdreamer:<ver>` (gateway/worker) and `vdreamer-sandbox:<ver>` (P1), pushed to the internal registry.
-- **Frontend:** `@vdreamer/client` and `@vdreamer/angular` as npm tarballs in the internal registry.
+- **Protocol artifacts:** each release attaches the `export-schema` output and conformance kit (§6.1). No npm packages.
 - **vLLM prerequisites** (A21): `--enable-auto-tool-choice`, a matching `--tool-call-parser`, and `--reasoning-parser` for thinking models.
 
 ### 5.4 Config, Secrets, Observability
@@ -369,35 +372,38 @@ Internal DNS only, with no default route. The gateway binds to the internal inte
 
 ## 6. Frontend Integration Spec
 
-### 6.1 Client SDK (`@vdreamer/client` + `@vdreamer/angular`)
+The contract any client must follow; vdreamer ships no client code.
 
-- **Types** come from `export-schema`; `X-Protocol-Version: 1`, major mismatch is an error.
-- **`streamRun(runId)` / `attachThread(threadId)`:** fetch-based SSE (D14), backoff + jitter reconnect via `Last-Event-ID`, `Observable<VDreamerEvent>`.
-- **`RunReducer`:** a pure fold to `{status, messages[{id, text, thinking, citations[]}], toolCalls[], artifacts[], interrupts[], progress, logs}`, deduplicated by `seq`.
-- **Forward compatibility:** unknown event types are ignored; unknown kinds and renderers fall back to download.
+### 6.1 Protocol Contract & Conformance Kit
+
+- **Artifacts:** `export-schema` publishes OpenAPI 3.1, the event JSON Schema, per-agent input schemas, and generated TS types.
+- **Conformance kit:** recorded SSE streams (chat, mid-run reconnect, tool overflow, all interrupt sources, artifacts, citations), each with the expected client state.
+- **Normative client behavior:**
+  - Send `X-Protocol-Version: 1`; reject a major-version mismatch.
+  - Consume SSE with fetch (D14). Reconnect with backoff + jitter, resuming via `Last-Event-ID`, or use `/threads/{id}/events` after a page refresh.
+  - Deduplicate by `seq`. Ignore unknown event types. Treat unknown artifact kinds/renderers as downloads.
+  - Fold events into `{status, messages[{id, text, thinking, citations[]}], toolCalls[], artifacts[], interrupts[], progress, logs}`.
 
 ### 6.2 Web Backend Proxy
 
-- **Pass-through:** proxies `/api/v1/**` with internal token and identity headers; no SSE buffering; idle timeout > 2× heartbeat; forwards `Last-Event-ID`.
-- **Artifact URLs:** same-origin with the session cookie, so `<img>`, `<iframe>`, and download links need no JS-attached headers (A25).
+- Proxies `/api/v1/**` with internal token and identity headers; no SSE buffering; idle timeout > 2× heartbeat; forwards `Last-Event-ID`. Artifact URLs are same-origin with the session cookie, so links need no JS-attached headers (A25).
 
-### 6.3 Rendering Conventions
+### 6.3 Rendering Hints (non-normative)
 
-| Kind | Default renderer | Source |
+| Kind | Suggested rendering | Source |
 |---|---|---|
-| `table` | Virtualized grid, server paging/sort, CSV/XLSX export | `/preview`, `/download` |
+| `table` | Server-paged grid, CSV/XLSX export | `/preview`, `/download` |
 | `image` | `<img>` | `/raw` |
-| `html` | `<iframe sandbox="allow-scripts">` (no `allow-same-origin`) | `/raw` |
-| `json` | Collapsible tree, or a registered `renderer` component | preview / `/raw` |
-| `file` | Download card; PDFs open in a viewer at `#page=N` | `/raw`, `/download` |
+| `html` | `<iframe sandbox="allow-scripts">`, no `allow-same-origin` | `/raw` |
+| `json` | Tree, or a view keyed by `renderer` | preview, `/raw` |
+| `file` | Download; PDFs at `#page=N` | `/raw`, `/download` |
 
-- **Citations:** inline markers bound to `message_id`. Clicking one opens `source.artifact_id` (or `uri`) at `locator.page`.
-- **Custom views:** apps register them with `registerRenderer(name, Component)`.
+Citations bind to `message_id` and open `source` at `locator.page`.
 
-### 6.4 Interrupt UI
+### 6.4 Interrupt Handling Obligations
 
-- **Renderers:** keyed by `interrupt.kind`; `generic` fallback renders the payload plus an `edit_schema` form. `tool_review` shows one card per action and submits `decisions[]`.
-- **Actions:** limited to `actions[]`; sends `expected_version`, refreshes on `409`. Prompt input is locked during `running`/`awaiting_approval` unless `wait_for_idle`.
+- Offer only `actions[]`. Build edit forms from `edit_schema`. For `tool_review`, submit `decisions[]` in action order.
+- Send `expected_version`; refresh on `409`. Block new prompts during `running`/`awaiting_approval` unless using `wait_for_idle`.
 
 ---
 
@@ -419,10 +425,10 @@ Internal DNS only, with no default route. The gateway binds to the internal inte
 | `require_approval`, `ApprovalGate`, RBAC, four-eyes, TTL, outbox notifications | ● | |
 | `/trigger`, `FileRef`, `safe_extract`, run callbacks | ● | |
 | `models.yaml` (vLLM, Ollama, fastembed), `resources.yaml` (Qdrant, Neo4j, SQL, MCP), subprocess sandbox | ● | |
-| `@vdreamer/client`, `@vdreamer/angular` (stream client, reducer, renderer registry) | ● | |
+| Protocol artifacts + conformance kit; `vdreamer run` terminal client | ● | |
 | Prometheus metrics, JSON logs | ● | |
 | Reference agents UC1–UC3 in `examples/` | ● | |
-| Container sandbox; reference Angular components; Redis adapter; OTLP; quotas; `vdreamer new`; time-travel API | | ● |
+| Container sandbox; Redis adapter; OTLP; quotas; `vdreamer new`; time-travel API | | ● |
 
 ### 7.2 Non-Goals
 
@@ -431,31 +437,24 @@ Internal DNS only, with no default route. The gateway binds to the internal inte
 - **Semantic layer:** building or syncing the Neo4j graph.
 - **MCP:** prompts, resources, sampling; exposing vdreamer agents as MCP servers.
 - **Platform scope:** generated server code (D1); LangGraph Platform API compatibility; non-LangChain frameworks; cloud model providers.
-- **UI:** a complete Angular application.
+- **Frontend:** any client application, UI component, or client SDK (Angular or otherwise). Client teams build against §6.
 
 ### 7.3 Reference Agents (`examples/`)
 
-**UC1 SQL & Data Analysis.** `schema_link` (Cypher via `ctx.resources["semantic"]`: terms → metrics → tables/joins) → `generate_sql` → `dry_run` (EXPLAIN, rows, statement class) → `ApprovalGate(kind="sql_review")` with lineage → execute on `ctx.resources["warehouse"]` → `table` → sandboxed chart → composite `html` report. Non-SELECT adds `approver_role` + `db:write` scope.
+**UC1 SQL & Data Analysis.** `schema_link` (Cypher via `ctx.resources["semantic"]`) → `generate_sql` → `dry_run` (EXPLAIN) → `ApprovalGate(kind="sql_review")` with lineage → execute on `ctx.resources["warehouse"]` → `table` → sandboxed chart → `html` report. Non-SELECT adds `approver_role` + `db:write`.
 
-**UC2 Site & Antenna Validation.** Mail worker uploads the ZIP unchanged → `/trigger` with `package: FileRef` → `safe_extract` (pdf, images, xlsx, docx) → VLM inspection (+ site-inventory MCP tools) → `json` verdict (`renderer="verdict.v1"`) → `ApprovalGate(approver_role="site_approver")` → callback.
+**UC2 Site & Antenna Validation.** Mail worker uploads the ZIP → `/trigger` (`package: FileRef`) → `safe_extract` → VLM inspection + MCP tools → `json` verdict (`renderer="verdict.v1"`) → `ApprovalGate(approver_role="site_approver")` → callback.
 
-**UC3 Multi-PDF Research** (multilingual EN + AR). *Ingest agent* (headless): sandbox parse → page-offset chunks → `dense` + `sparse` aliases → Qdrant upsert `{corpus_id, doc_id, page, chunk_id, text}`. *Chat agent* (`create_agent`): hybrid `query_points` (RRF) → `rerank` → answer with reasoning → `emit_citation` per chunk (PDF artifact, page) → comparison `table`.
+**UC3 Multi-PDF Research** (EN + AR). *Ingest* (headless): sandbox parse → page-offset chunks → `dense` + `sparse` → Qdrant upsert. *Chat* (`create_agent`): hybrid `query_points` (RRF) → `rerank` → answer with reasoning → `emit_citation` per chunk → comparison `table`.
 
 ### 7.4 New Assumptions
 
-- **A24:** Parquet tables; CSV/XLSX on download.
-- **A25:** Same-origin artifact URLs via proxy + session cookie.
-- **A26:** `/trigger` callbacks via outbox, allowlisted URLs only.
-- **A27–A29:** Retired (RAG moved to UC3 reference agent).
+- **A24:** Parquet tables. **A25:** Same-origin artifact URLs. **A26:** Callbacks to allowlisted URLs only. **A27–A29:** Retired.
 - **A30:** Python ≥3.11. **A31:** All LangGraph streaming specifics live in one adapter module. **A32:** `HITL_STRICT_SCOPES` four-eyes. **A33:** Redaction = policy keys + defaults.
-- **A34:** `safe_extract` is core (security-critical); agents call it explicitly.
-- **A35:** `resources.yaml` backends are injected as native clients, unwrapped.
-- **A36:** fastembed runs in-process from a vendored `cache_dir`.
-- **A37:** All tools are `BaseTool`; governance is a proxy, not a base class.
-- **A38:** `langchain.mcp` is beta; isolated in one module and pinned.
-- **A39:** MCP servers live in `resources.yaml`.
-- **A40:** Network policy is authoritative; `NETWORK_ALLOWLIST` is defense in depth.
+- **A34:** `safe_extract` is core (security-critical). **A35:** Resources injected as native clients. **A36:** fastembed in-process from vendored `cache_dir`.
+- **A37:** All tools are `BaseTool`; governance is a proxy. **A38:** `langchain.mcp` (beta) isolated and pinned. **A39:** MCP servers live in `resources.yaml`. **A40:** Network policy is authoritative; `NETWORK_ALLOWLIST` is defense in depth.
 - **A41:** Supported range is `langchain` 1.4+ and `langgraph` 1.2+ within 1.x; a 2.0 release requires a vdreamer major version.
 - **A42:** `durability="sync"` by default, because crash recovery (A6) needs every step checkpointed. Agents may opt into `async`.
 - **A43:** The stable v2 stream is the default driver. v3 event streaming (beta) is opt-in until it is stable.
 - **A44:** Interrupts from `require_approval`, HITL middleware, MCP elicitation, and raw `interrupt()` all share one protocol.
+- **A45:** Users are AI developers: `vdreamer run` replaces a UI for testing; the conformance kit replaces a client SDK.

@@ -1,0 +1,140 @@
+# vdreamer CI (Milestone 0 — docs/tasks.md).
+#
+# Five jobs:
+#   locked          — the committed uv.lock is the source of truth: lint, type-check,
+#                      full test suite. Also proves `uv sync --locked --extra postgres`
+#                      works from a clean checkout (Milestone-0 exit criterion).
+#   floor           — `uv lock --resolution lowest-direct` (NOT committed): smoke
+#                      tests against the minimum langchain/langgraph versions (A41).
+#   latest          — `uv lock --upgrade` (NOT committed): smoke tests against the
+#                      latest 1.x minor.
+#   uv-independence  — the product scope: `uv build` a wheel, install it into a clean
+#                      `python -m venv` with plain `pip`, and run the CLI. vdreamer
+#                      must never require uv at runtime.
+#   zero-egress     — `uv run --frozen --offline vdreamer doctor --offline`, which
+#                      asserts zero egress with an in-process socket guard (§5.2).
+#
+# UV_PYTHON_DOWNLOADS=never: the dev toolchain never fetches interpreters
+# (§5.2); actions/setup-python provides the pinned 3.11 (.python-version).
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_PYTHON_DOWNLOADS: "never"
+
+jobs:
+  locked:
+    name: locked (uv.lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - name: Fail on lockfile drift
+        run: uv lock --check
+      - name: Prove the Milestone-0 exit criterion (clean sync of the postgres extra)
+        run: uv sync --locked --extra postgres
+      - name: Sync the full dev environment
+        run: uv sync --locked --all-extras
+      - name: Lint
+        run: uv run ruff check .
+      - name: Type-check
+        run: uv run mypy
+      - name: Test
+        run: uv run pytest
+
+  floor:
+    name: floor (lowest-direct, A41)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - name: Resolve the pinned floor (lockfile is NOT committed)
+        run: uv lock --resolution lowest-direct
+      - name: Sync against the floor
+        run: uv sync --frozen --all-extras
+      - name: Print resolved floor pins
+        run: uv run --frozen python -c "from importlib import metadata; print('langchain', metadata.version('langchain')); print('langgraph', metadata.version('langgraph'))"
+      - name: Smoke-test the agent contract on the floor
+        run: uv run --frozen pytest -m smoke
+
+  latest:
+    name: latest (upgrade, A41)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - name: Resolve the latest 1.x minor (lockfile is NOT committed)
+        run: uv lock --upgrade
+      - name: Sync against the latest pins
+        run: uv sync --frozen --all-extras
+      - name: Print resolved latest pins
+        run: uv run --frozen python -c "from importlib import metadata; print('langchain', metadata.version('langchain')); print('langgraph', metadata.version('langgraph'))"
+      - name: Smoke-test the agent contract on the latest pins
+        run: uv run --frozen pytest -m smoke
+
+  uv-independence:
+    name: plain-pip install (product scope)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+      - name: Build the wheel (dev side; sdist + wheel)
+        run: uv build
+      - name: Install into a clean python -m venv with plain pip
+        run: |
+          python -m venv .venv-pip
+          .venv-pip/bin/pip install dist/vdreamer-*.whl
+      - name: CLI works without uv (console script and module entry)
+        run: |
+          .venv-pip/bin/vdreamer --version
+          .venv-pip/bin/python -m vdreamer --version
+      - name: Validate a sample agent from the plain-pip install
+        env:
+          PYTHONPATH: examples/smoke
+        run: .venv-pip/bin/vdreamer validate pinger:agent
+
+  zero-egress:
+    name: doctor --offline (zero egress, §5.2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      # `doctor --offline` asserts zero egress with an in-process socket guard
+      # (blocks/records connect, create_connection, getaddrinfo while probing).
+      # On self-hosted egress-blocked runners the VM network policy (A40) is the
+      # authoritative control; the guard is defense in depth and the CI signal.
+      - name: Sync frozen, without downloads
+        run: uv sync --frozen --all-extras
+      - name: Assert zero egress
+        run: uv run --frozen --offline vdreamer doctor --offline

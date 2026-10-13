@@ -1,0 +1,26 @@
+# Python bytecode / packaging
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.agents/
+
+# Environments (uv creates .venv/; the plain-pip CI job uses .venv-pip/)
+.venv/
+.venv-pip/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# uv
+# (uv.lock IS committed — it is the single source of truth for dependencies)
+
+# Editor / OS artifacts
+docs/.PRD.md.un~
+.DS_Store
