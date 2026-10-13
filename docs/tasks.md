@@ -81,26 +81,26 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 **Goal:** the normalized event envelope, its storage, and both stream drivers, all behind one adapter module (A31/A43).
 
 **Storage and envelope**
-- [ ] `run_events(run_id, seq, type, ns, payload jsonb, ts)`, PK `(run_id, seq)` (A3); SSE `id: {run_id}:{seq}`.
-- [ ] Envelope: `{"v":"1.0", type, run_id, thread_id, agent, seq, ts, ns, payload}`.
+- [x] `run_events(run_id, seq, type, ns, payload jsonb, ts)`, PK `(run_id, seq)` (A3); SSE `id: {run_id}:{seq}`. (`eventlog.RUN_EVENTS_DDL` + `PostgresEventLog.write` allocate `seq` from the table and stamp `envelope.sse_id`; the SSE framing itself is M4.)
+- [x] Envelope: `{"v":"1.0", type, run_id, thread_id, agent, seq, ts, ns, payload}`. (`events.EventEnvelope` — field order is the contract.)
 
 **Stream drivers.** One adapter module (A31), selected by `VDREAMER_STREAM_DRIVER`:
-- [ ] **v2 driver (default):** `astream(stream_mode=["messages","updates","custom"], subgraphs=True, version="v2")`. Pending interrupts are read from `aget_state(config).interrupts` after the stream ends.
-- [ ] **v3 driver (opt-in, beta):** `astream_events(version="v3")`. Maps the `messages` projections (text, reasoning, tool calls, usage), lifecycle, subgraphs, and custom events.
+- [x] **v2 driver (default):** `astream(stream_mode=["messages","updates","custom"], subgraphs=True, version="v2")`. Pending interrupts are read from `aget_state(config).interrupts` after the stream ends. (`streaming.V2StreamDriver`, verified on langgraph 1.2.15.)
+- [x] **v3 driver (opt-in, beta):** `astream_events(version="v3")`. Maps the `messages` projections (text, reasoning, tool calls, usage), lifecycle, subgraphs, and custom events. (`streaming.V3StreamDriver`; 1.2.15 fact: `data-delta`/`block-delta` message events carry no text, so they are skipped — recorded beta gap, gated by the golden suite.)
 
 **Event mapping**
-- [ ] Event types: `run.status`, `token.delta`, `thinking.delta`, `message.completed`, `tool.call`, `tool.result`, `artifact.created`, `citation`, `interrupt.requested`, `interrupt.resolved`, `progress`, `log`.
-- [ ] Thinking extraction (D18, A20):
+- [x] Event types: `run.status`, `token.delta`, `thinking.delta`, `message.completed`, `tool.call`, `tool.result`, `artifact.created`, `citation`, `interrupt.requested`, `interrupt.resolved`, `progress`, `log`. (`events.EventType`, all twelve.)
+- [x] Thinking extraction (D18, A20) — `streaming.chunk_text_and_thinking` + `ThinkTagSplitter`; the splitter is a public, unit-tested primitive (per-alias wiring waits for `models.yaml`, M7), and `expose_thinking=false` suppresses deltas *and* the `message.completed.thinking` field:
   - standard `reasoning` blocks first
   - per-alias fallbacks: the `reasoning_content` field, then a stateful `<think>` splitter that handles split chunks
   - suppressed when `expose_thinking=false`
-- [ ] Custom data: vdreamer-enveloped custom data → artifact/citation/progress/log events; other custom data → `log`. `ns` is preserved for subgraphs.
+- [x] Custom data: vdreamer-enveloped custom data → artifact/citation/progress/log events; other custom data → `log`. `ns` is preserved for subgraphs. (`streaming._RunMapper.custom`; `ns` is `[]` at the root.)
 
 **Delivery and testing**
-- [ ] Delta batching (50 ms / 32 tokens), post-run compaction (A4), 15 s heartbeat, `X-Accel-Buffering: no` (A22).
-- [ ] Golden-event test suite: both drivers emit **identical** protocol events for the same graphs. This suite is the gate for promoting v3.
+- [ ] Delta batching (50 ms / 32 tokens), post-run compaction (A4), 15 s heartbeat, `X-Accel-Buffering: no` (A22). (Delta batching landed — `streaming.DeltaBatcher`, unit-tested and driver-wired — with the tuning constants `DELTA_BATCH_*`, `HEARTBEAT_INTERVAL_S`, `SSE_BUFFERING_HEADER`/`_VALUE`; post-run compaction (A4) is not built yet, and the heartbeat + buffering header fire with the M4 SSE transport.)
+- [x] Golden-event test suite: both drivers emit **identical** protocol events for the same graphs. This suite is the gate for promoting v3. (`tests/golden/`: all six scenarios at full v2↔v3 parity — no xfail — matched against golden type-sequence data recorded from the drivers plus the §3.3 payload-shape table applied to every event.)
 
-**Exit:** the golden-event suite passes for the v2 driver; v3 runs as opt-in beta.
+**Exit:** ✅ verified — the golden-event suite passes for the v2 driver with v3 at full parity on every scenario (no xfail needed); v3 stays opt-in beta behind `VDREAMER_STREAM_DRIVER=v3` (langgraph 1.2.15 `LangChainBetaWarning`). `uv run pytest tests/golden` green (7 tests).
 
 ---
 

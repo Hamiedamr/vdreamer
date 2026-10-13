@@ -28,6 +28,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 import pydantic
+from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 #: PRD §3.3: citation snippets are capped at 300 characters.
@@ -127,14 +128,45 @@ def current_context() -> VDreamerContext:
     return ctx
 
 
+def _mirror_to_stream(record: dict[str, Any]) -> None:
+    """Best-effort mirror of a buffered record into the LangGraph stream (WP2).
+
+    Under the vdreamer stream drivers (``vdreamer.streaming``, A31), custom-mode
+    stream data — not ``pending`` — is the live transport: every driver maps
+    vdreamer-enveloped ``custom`` parts back onto the protocol events. So the
+    helpers append to ``pending`` (the fallback, kept for non-streamed runs
+    and drained by the worker) *and* write the same record through
+    ``langgraph.config.get_stream_writer()`` when one is active.
+
+    The mirror is strictly best-effort: no stream context (plain ``ainvoke``,
+    tests, or a driver run that does not collect ``custom`` mode), no callable,
+    or a failing writer must never break the run. Outside a LangGraph stream,
+    ``get_stream_writer()`` raises and the record simply stays buffered.
+    """
+    try:
+        writer = get_stream_writer()
+    except Exception:
+        return
+    if writer is None:
+        return
+    try:
+        writer(record)
+    except Exception:
+        pass
+
+
 def emit_progress(label: str, pct: float | None = None) -> None:
     """Emit a ``progress`` record (PRD §3.3): ``{label, pct?}``."""
-    current_context().pending.append({"type": "progress", "label": label, "pct": pct})
+    record = {"type": "progress", "label": label, "pct": pct}
+    current_context().pending.append(record)
+    _mirror_to_stream(record)
 
 
 def emit_log(message: str, level: str = "info") -> None:
     """Emit a ``log`` record (PRD §3.3): ``{level, message}``."""
-    current_context().pending.append({"type": "log", "level": level, "message": message})
+    record = {"type": "log", "level": level, "message": message}
+    current_context().pending.append(record)
+    _mirror_to_stream(record)
 
 
 def emit_artifact(
@@ -167,17 +199,17 @@ def emit_artifact(
     if data is None:
         raise TypeError("artifact data must not be None")
     artifact_id = f"art_{uuid.uuid4().hex}"
-    current_context().pending.append(
-        {
-            "type": "artifact",
-            "artifact_id": artifact_id,
-            "name": name,
-            "kind": kind,
-            "data": data,
-            "metadata": metadata,
-            "renderer": renderer,
-        }
-    )
+    record = {
+        "type": "artifact",
+        "artifact_id": artifact_id,
+        "name": name,
+        "kind": kind,
+        "data": data,
+        "metadata": metadata,
+        "renderer": renderer,
+    }
+    current_context().pending.append(record)
+    _mirror_to_stream(record)
     return ArtifactRef(artifact_id=artifact_id, name=name, kind=kind)
 
 
@@ -194,17 +226,17 @@ def emit_citation(
     survive the run); ``snippet`` is truncated to ``MAX_SNIPPET_CHARS`` (300).
     """
     citation_id = f"cit_{uuid.uuid4().hex}"
-    current_context().pending.append(
-        {
-            "type": "citation",
-            "citation_id": citation_id,
-            "message_id": message_id,
-            "source": dict(source),
-            "locator": dict(locator) if locator is not None else None,
-            "snippet": snippet[:MAX_SNIPPET_CHARS],
-            "score": score,
-        }
-    )
+    record = {
+        "type": "citation",
+        "citation_id": citation_id,
+        "message_id": message_id,
+        "source": dict(source),
+        "locator": dict(locator) if locator is not None else None,
+        "snippet": snippet[:MAX_SNIPPET_CHARS],
+        "score": score,
+    }
+    current_context().pending.append(record)
+    _mirror_to_stream(record)
     return citation_id
 
 

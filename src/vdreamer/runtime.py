@@ -22,6 +22,8 @@ from langchain_core.runnables import RunnableConfig
 
 from vdreamer.agents import BaseAgent, BuildContext
 from vdreamer.context import VDreamerContext, bind_context
+from vdreamer.eventlog import EventSink
+from vdreamer.streaming import StreamSpec, make_stream_driver, stream_driver_from_env
 from vdreamer.validate import ensure_compiled
 
 
@@ -162,6 +164,53 @@ class AgentRunner:
         await self.agent.on_run_end(replace(info, status="completed"), "completed")
         return result
 
+    async def _execute_streaming(
+        self,
+        built: Any,
+        info: RunInfo,
+        input: Any,
+        config: RunnableConfig | None,
+        context: VDreamerContext | None,
+        durability: str,
+        sink: EventSink,
+    ) -> Any:
+        """Start hook → stream driver → sink → end hook (``arun(sink=...)``, WP2).
+
+        Same hook and return-value contract as :meth:`_execute`: the driver
+        (``vdreamer.streaming``, selected by ``VDREAMER_STREAM_DRIVER``, A31)
+        yields protocol envelopes for the whole run — including the terminal
+        ``run.status`` — and ``driver.result`` carries the final graph value
+        the non-streaming path would return. When the graph raises, the
+        driver emits the ``failed`` envelope first, then the exception
+        propagates here so the hooks and the caller see it exactly as
+        ``_execute`` would.
+        """
+        spec = StreamSpec(
+            run_id=info.run_id,
+            thread_id=info.thread_id,
+            agent=info.agent_name,
+            attempt=info.attempt,
+            expose_thinking=bool(getattr(self.agent, "expose_thinking", True)),
+            has_checkpointer=self._checkpointer is not None,
+        )
+        driver = make_stream_driver(stream_driver_from_env())
+        await self.agent.on_run_start(info)
+        try:
+            async for envelope in driver.astream(
+                built,
+                input,
+                config=config,
+                context=context,
+                durability=durability,
+                spec=spec,
+            ):
+                await sink.write(envelope)
+        except Exception:
+            await self.agent.on_run_end(replace(info, status="failed"), "failed")
+            raise
+        await self.agent.on_run_end(replace(info, status="completed"), "completed")
+        return driver.result
+
     async def arun(
         self,
         input: Any,
@@ -169,6 +218,7 @@ class AgentRunner:
         config: RunnableConfig | None = None,
         context: VDreamerContext | None = None,
         durability: Literal["sync", "async"] | None = None,
+        sink: EventSink | None = None,
     ) -> Any:
         """Run one invocation of the agent's graph end to end.
 
@@ -186,6 +236,14 @@ class AgentRunner:
            resolve the run from any node or tool; without one, nothing binds
            and the helpers raise if a node reaches for them.
 
+        With ``sink`` (Milestone 2, additive), step 3 instead streams the run
+        through the selected driver (``VDREAMER_STREAM_DRIVER``, A31) and
+        writes every protocol envelope to the sink in arrival order; hooks,
+        exception semantics, and the return value (the final state) are
+        identical to the non-streaming path. The driver is chosen per run —
+        ``stream_driver_from_env()`` — and an invalid value raises
+        ``ValueError`` at run start, never at import.
+
         ``context`` is forwarded to ``ainvoke`` whenever given — verified safe
         on langgraph 1.2.15: a graph that declares no ``context_schema`` runs
         unchanged, and one that does (``StateGraph(..., context_schema=...)``,
@@ -200,7 +258,9 @@ class AgentRunner:
         returns normally with the pending interrupt readable from
         ``aget_state(config).interrupts``; mapping that onto
         ``awaiting_approval`` (PRD §3.2) and resuming is the worker's job,
-        Milestone 3.
+        Milestone 3. The streaming path emits one ``interrupt.requested``
+        envelope per pending interrupt and ends on ``run.status``
+        ``"awaiting_approval"`` (§3.2).
 
         Args:
             input: the graph input — or a ``Command(resume=...)`` continuation.
@@ -208,6 +268,8 @@ class AgentRunner:
                 what keys the checkpointer.
             context: the run identity, bound for the implicit helpers.
             durability: per-run override of the agent's durability (A42).
+            sink: when given, every protocol event of the run is written here
+                (Milestone 2, WP2), in arrival order with per-run ``seq``.
 
         Returns:
             The graph result (``stream_mode="values"``), unchanged.
@@ -215,7 +277,16 @@ class AgentRunner:
         built = self.build()
         resolved = self._resolve_durability(durability)
         info = self._run_info(context=context, config=config)
+        if sink is None:
+            if context is None:
+                return await self._execute(built, info, input, config, None, resolved)
+            with bind_context(context):
+                return await self._execute(built, info, input, config, context, resolved)
         if context is None:
-            return await self._execute(built, info, input, config, None, resolved)
+            return await self._execute_streaming(
+                built, info, input, config, None, resolved, sink
+            )
         with bind_context(context):
-            return await self._execute(built, info, input, config, context, resolved)
+            return await self._execute_streaming(
+                built, info, input, config, context, resolved, sink
+            )
