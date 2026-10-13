@@ -142,6 +142,10 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 - [ ] Interrupts: `GET /interrupts`, `GET /interrupts/{id}`, `POST /interrupts/{id}/resolve` (§4).
 - [ ] Artifacts: `/artifacts/{id}`, `/preview`, `/raw`, `/download` (§3.4).
 - [ ] Ops: `GET /protocol/schema.json`, `/openapi.json`, `/healthz`, `/readyz`, `/metrics`.
+- [ ] `GET /api/v1/docs` — Swagger UI served from vendored assets at `/static/vendor/swagger-ui/` (no CDN; §5.2/A13), pointing at `/api/v1/openapi.json`.
+- [ ] Vendored swagger-ui assets ship in the repo and are covered by the zero-egress checks.
+- [ ] The gateway is built on FastAPI (D20), pinned via `uv add fastapi` and subject to the floor/latest CI pins; the framework stays internal — vdreamer's contract is the REST/SSE protocol and OpenAPI 3.1 artifacts.
+- [ ] FastAPI's default docs CDN is overridden: Swagger UI is served from vendored assets only (zero egress, §5.2), consistent with the vendored-swagger-ui items above.
 
 **Errors and auth**
 - [ ] Uniform error body `{error: {code, message, details?}}` with stable codes (`run_conflict`, `forbidden_role`, `artifact_expired`, …).
@@ -154,7 +158,7 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 **Metrics**
 - [ ] Prometheus: queue depth, run latency, SSE connections, model latency/tokens per alias, tool latency/errors per source, MCP health, sandbox timeouts, outbox lag.
 
-**Exit:** REST contract tests (`uv run pytest tests/api`) cover every route, including auth failures and error codes.
+**Exit:** REST contract tests (`uv run pytest tests/api`) cover every route, including auth failures and error codes; `/api/v1/docs` renders and `/api/v1/openapi.json` is valid OpenAPI 3.1, with the served HTML asserting CSP/no-CDN (no external URLs).
 
 ---
 
@@ -309,6 +313,7 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 **Zero-egress**
 - [ ] Runtime settings: LangSmith off; `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`; fastembed `local_files_only`; bundled `TIKTOKEN_CACHE_DIR`; vendored chart JS, no CDNs; `NETWORK_ALLOWLIST` enforced; no telemetry or update checks.
 - [ ] `doctor --offline`: probes backends, model files, MCP servers, sandbox; prints LangChain/LangGraph versions; asserts zero egress (CI with blocked network).
+- [ ] Vendored swagger-ui assets pass `doctor --offline` (alongside the vendored chart JS).
 
 **Release pipeline (dev side, uv)**
 - [ ] `uv build` produces the vdreamer sdist and wheel.

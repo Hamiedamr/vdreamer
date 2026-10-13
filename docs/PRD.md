@@ -1,6 +1,6 @@
 # PRD: LangGraph Agent Serving VDreamer (`vdreamer`)
 
-`protocol_version: 1.0` · Draft v4 · Refs: D1–D19, A1–A23 (discovery); A24–A45 new (§7.4).
+`protocol_version: 1.0` · Draft v4 · Refs: D1–D19, A1–A23 (discovery); A24–A45, D20 new (§7.4).
 
 ---
 
@@ -108,7 +108,7 @@ class SiteValidator(BaseAgent):
 - **Both:** vdreamer-enveloped custom data becomes artifact/citation/progress/log events; other custom data becomes `log`; `ns` is preserved for subgraphs.
 - **Tool events:** governed tools (§2.7) are the single emitter of `tool.call`/`tool.result`. Ungoverned tool messages are mapped with default redaction.
 
-### 2.5 REST Contract (`/api/v1`)
+### 2.5 REST Contract (`/api/v1`) — served by a FastAPI gateway (D20; the framework itself is not contract)
 
 | Method & Path | Semantics |
 |---|---|
@@ -458,3 +458,4 @@ Citations bind to `message_id` and open `source` at `locator.page`.
 - **A43:** The stable v2 stream is the default driver. v3 event streaming (beta) is opt-in until it is stable.
 - **A44:** Interrupts from `require_approval`, HITL middleware, MCP elicitation, and raw `interrupt()` all share one protocol.
 - **A45:** Users are AI developers: `vdreamer run` replaces a UI for testing; the conformance kit replaces a client SDK.
+- **D20:** The REST gateway (§ routes, `/api/v1`) is implemented on FastAPI, added as a pinned runtime dependency. Rationale: OpenAPI 3.1 generation is required (`GET /api/v1/openapi.json`, `vdreamer export-schema`) and FastAPI provides it natively; Pydantic 2 is already a locked dependency; async fits SSE. Constraints: the framework is internal implementation — vdreamer's contract is the REST/SSE protocol and OpenAPI 3.1 artifacts, not FastAPI specifics; Swagger UI must use vendored assets (no CDN, §5.2); FastAPI never appears in the agent-author-facing API (BaseAgent/BuildContext contract).
