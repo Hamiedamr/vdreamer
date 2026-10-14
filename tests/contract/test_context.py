@@ -107,21 +107,24 @@ def test_emit_artifact_appends_record_and_returns_ref() -> None:
     assert ref.artifact_id.startswith("art_")
     assert len(ref.artifact_id) == len("art_") + 32  # uuid4 hex
     record = ctx.pending[0]
+    # M6: the record carries the encoded artifact's description, never its data;
+    # no store is bound here, so nothing was kept (``stored`` false, no URLs).
     assert record == {
         "type": "artifact",
         "artifact_id": ref.artifact_id,
         "name": "verdict",
-        "kind": ArtifactKind.JSON,
-        "data": {"ok": True},
+        "kind": "json",
+        "mime_type": "application/json",
+        "size_bytes": 12,
+        "preview": {"body": {"ok": True}},
         "metadata": {"source": "vision"},
         "renderer": "verdict.v1",
+        "stored": False,
     }
-    # str-enum kind round-trips as its value
-    assert record["kind"] == "json"
     assert ref.name == "verdict"
     assert ref.kind is ArtifactKind.JSON
-    assert ref.mime_type is None
-    assert ref.size_bytes is None
+    assert ref.mime_type == "application/json"
+    assert ref.size_bytes == 12
 
 
 def test_emit_artifact_rejects_bad_kind_and_none_data() -> None:

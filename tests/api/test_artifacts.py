@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -72,13 +73,23 @@ def test_html_is_served_under_the_artifact_csp(client: TestClient, stack: Stack)
     assert "http" not in csp  # no external origin anywhere in the policy
 
 
-def test_preview_bounds(client: TestClient, stack: Stack) -> None:
-    _put(stack, new_thread(client), b"PAR1", kind="table", mime_type="application/x-parquet",
-         preview={"columns": ["a"], "rows": [[1]], "row_count": 1})
+def _parquet(tmp_path: Path, rows: list[dict[str, Any]]) -> bytes:
+    from vdreamer.tables import write_parquet
+
+    path = tmp_path / "t.parquet"
+    write_parquet(rows, path)
+    return path.read_bytes()
+
+
+def test_preview_bounds(client: TestClient, stack: Stack, tmp_path: Path) -> None:
+    data = _parquet(tmp_path, [{"a": 1}])
+    _put(stack, new_thread(client), data, kind="table", mime_type="application/vnd.apache.parquet",
+         preview={"schema": [{"name": "a", "type": "int64"}], "rows": [{"a": 1}], "row_count": 1})
     body = client.get("/api/v1/artifacts/art_1/preview?offset=5&limit=1000",
                       headers=headers()).json()
     assert (body["offset"], body["limit"]) == (5, 1000)
     assert body["preview"]["row_count"] == 1
+    assert (body["row_count"], body["rows"]) == (1, [])  # offset 5 is past the one row
     assert_error(
         client.get("/api/v1/artifacts/art_1/preview?limit=1001", headers=headers()),
         422,
@@ -86,22 +97,30 @@ def test_preview_bounds(client: TestClient, stack: Stack) -> None:
     )
 
 
-def test_download_formats(client: TestClient, stack: Stack) -> None:
-    _put(stack, new_thread(client), b"PAR1", kind="table", mime_type="application/x-parquet")
-    assert client.get(
-        "/api/v1/artifacts/art_1/download?format=parquet", headers=headers()
-    ).status_code == 200
-    error = assert_error(
-        client.get("/api/v1/artifacts/art_1/download?format=csv", headers=headers()),
-        422,
-        "unsupported_format",
-    )
-    assert error["details"] == {"available": ["parquet"]}
+def test_download_formats(client: TestClient, stack: Stack, tmp_path: Path) -> None:
+    data = _parquet(tmp_path, [{"a": 1}])
+    _put(stack, new_thread(client), data, kind="table", mime_type="application/vnd.apache.parquet",
+         filename="t.parquet")
+    parquet = client.get("/api/v1/artifacts/art_1/download?format=parquet", headers=headers())
+    assert parquet.status_code == 200 and parquet.content == data
+    csv = client.get("/api/v1/artifacts/art_1/download?format=csv", headers=headers())
+    assert csv.status_code == 200 and csv.content.splitlines() == [b'"a"', b"1"]
+    assert 'filename="t.csv"' in csv.headers["Content-Disposition"]
     assert_error(
         client.get("/api/v1/artifacts/art_1/download?format=pdf", headers=headers()),
         422,
         "invalid_request",
     )
+
+
+def test_formats_apply_to_tables_only(client: TestClient, stack: Stack) -> None:
+    _put(stack, new_thread(client), b'{"ok": true}')
+    error = assert_error(
+        client.get("/api/v1/artifacts/art_1/download?format=csv", headers=headers()),
+        422,
+        "unsupported_format",
+    )
+    assert error["details"] == {"available": []}
 
 
 @pytest.mark.parametrize("suffix", ["/raw", "/download"])

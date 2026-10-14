@@ -49,7 +49,8 @@ async def test_golden_chat_with_custom_records() -> None:
         assert len(node_log) == 1
         assert node_log[0].payload == {"level": "info", "message": "hello from the node"}
 
-        # artifact.created (§3.4): identity wiring + M6 placeholders absent.
+        # artifact.created (§3.4): identity wiring + the M6 encoded description;
+        # no store is bound in the golden harness, so no URLs.
         artifact = _golden.single(events, "artifact.created")
         assert artifact.payload["artifact_id"].startswith("art_")
         assert artifact.payload["question_id"] == artifact.run_id
@@ -58,8 +59,11 @@ async def test_golden_chat_with_custom_records() -> None:
         assert artifact.payload["name"] == "verdict"
         assert artifact.payload["renderer"] == "verdict.v1"
         assert artifact.payload["metadata"] == {}
-        for absent in ("preview", "view_url", "download_url", "mime_type", "size_bytes"):
-            assert absent not in artifact.payload, f"M6 seam: no {absent} yet"
+        assert artifact.payload["mime_type"] == "application/json"
+        assert artifact.payload["size_bytes"] == 12
+        assert artifact.payload["preview"] == {"body": {"ok": True}}
+        for absent in ("view_url", "download_url"):
+            assert absent not in artifact.payload, f"nothing stored: no {absent}"
 
         # citation {citation_id, message_id, source{...}, locator?, snippet
         # ≤300, score?} (§3.3) — bound to the message it cites, no score.

@@ -18,10 +18,13 @@ Every governed call — through :class:`GovernedTool` (``ctx.tools.govern``,
    ``ctx.idempotency_key`` = ``{run key}:{tool_call_id}`` — the model's call id
    is checkpointed, so a recovered attempt re-executing the call gets the same
    key (A6).
-5. **Normalize** — text over ``max_result_chars`` becomes a ``json`` (when it
-   parses as an object or list, ≤1 MB) or ``file`` artifact, and the model
-   gets the truncated body plus the ``artifact_id``. MCP structured content
-   (the ``ToolMessage.artifact``) and base64 media blocks map the same way.
+5. **Normalize** — a returned ``vdreamer.Artifact`` (or a list of them, or one
+   as the ``ToolMessage.artifact``) is stored like ``emit_artifact`` and the
+   model gets a reference naming its ``artifact_id``. Text over
+   ``max_result_chars`` becomes a ``json`` (when it parses as an object or
+   list, ≤1 MB) or ``file`` artifact, and the model gets the truncated body
+   plus the ``artifact_id``. MCP structured content (the
+   ``ToolMessage.artifact``) and base64 media blocks map the same way.
 6. **Contain** — failures become ``ToolMessage(status="error")`` with a code:
    ``tool_error | timeout | denied | transport | invalid_args``. The run goes
    on unless ``fail_run=True``, which raises :class:`GovernedToolError`.
@@ -46,7 +49,7 @@ import fnmatch
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
@@ -56,7 +59,8 @@ from langchain_core.tools import BaseTool
 from langgraph.errors import GraphBubbleUp
 
 from vdreamer import metrics
-from vdreamer.artifacts import write_artifact
+from vdreamer.artifact_data import json_preview
+from vdreamer.artifacts import Artifact, run_blocking, store_returned, write_artifact
 from vdreamer.context import (
     VDreamerContext,
     bind_context,
@@ -255,7 +259,7 @@ async def _text_artifact(text: str, call: GovernedCall) -> str:
             name=f"{call.name} result",
             data=data,
             mime_type="application/json",
-            preview={"body": parsed} if len(data) <= JSON_PREVIEW_MAX_BYTES else {},
+            preview=json_preview(parsed, len(data)),
             metadata=_artifact_metadata(call),
             filename=f"{stem}.json",
         )
@@ -304,6 +308,44 @@ def _block_text(block: Any) -> str | None:
     if isinstance(block, Mapping) and block.get("type") == "text":
         return str(block.get("text") or "")
     return None
+
+
+def _is_artifacts(value: Any) -> bool:
+    if isinstance(value, Artifact):
+        return True
+    return (
+        isinstance(value, list) and bool(value) and all(isinstance(v, Artifact) for v in value)
+    )
+
+
+async def returned_artifacts(result: Any, call: GovernedCall) -> tuple[Any, list[str]]:
+    """Store a returned ``Artifact`` (or list), or one riding ``ToolMessage.artifact``."""
+    carrier = result.artifact if isinstance(result, ToolMessage) else result
+    if not _is_artifacts(carrier):
+        return result, []
+    items = [carrier] if isinstance(carrier, Artifact) else list(carrier)
+    refs = [await store_returned(item) for item in items]
+    ids = [ref.artifact_id for ref in refs]
+    pointer = {"artifact_ids": ids}
+    if isinstance(result, ToolMessage) and not result.additional_kwargs.get(_RETURNED_MARK):
+        return result.model_copy(update={"artifact": pointer}), ids
+    text = "\n".join(
+        f"[vdreamer: stored {ref.kind.value} artifact {ref.artifact_id} ({ref.name!r})]"
+        for ref in refs
+    )
+    message = ToolMessage(
+        content=text, artifact=pointer, name=call.name, tool_call_id=call.tool_call_id
+    )
+    return message, ids
+
+
+async def _normalized(result: Any, call: GovernedCall) -> tuple[Any, list[str]]:
+    """Step 5 in full: returned artifacts first, then overflow."""
+    result, artifact_ids = await returned_artifacts(result, call)
+    if isinstance(result, ToolMessage):
+        result, overflow = await normalize(result, call)
+        artifact_ids = [*artifact_ids, *overflow]
+    return result, artifact_ids
 
 
 async def normalize(result: ToolMessage, call: GovernedCall) -> tuple[ToolMessage, list[str]]:
@@ -563,20 +605,10 @@ async def run_governed(
         except Exception as exc:
             raise pipeline.contain(exc) from exc
         result = pipeline.check(result)
-        artifact_ids: list[str] = []
-        if isinstance(result, ToolMessage):
-            normalized, artifact_ids = await normalize(result, call)
-            result = normalized  # type: ignore[assignment]
+        result, artifact_ids = await _normalized(result, call)
     except _Contained as failure:
         return pipeline.failed(failure)
     return pipeline.succeeded(result, artifact_ids)  # type: ignore[no-any-return]
-
-
-def _run_coroutine_blocking(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run ``coro`` to completion from synchronous code, loop or no loop."""
-    context = contextvars.copy_context()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(context.run, asyncio.run, coro).result()
 
 
 def run_governed_sync(
@@ -611,10 +643,7 @@ def run_governed_sync(
         finally:
             pool.shutdown(wait=False)
         result = pipeline.check(result)
-        artifact_ids: list[str] = []
-        if isinstance(result, ToolMessage):
-            normalized, artifact_ids = _run_coroutine_blocking(normalize(result, call))
-            result = normalized  # type: ignore[assignment]
+        result, artifact_ids = run_blocking(_normalized(result, call))
     except _Contained as failure:
         return pipeline.failed(failure)
     return pipeline.succeeded(result, artifact_ids)  # type: ignore[no-any-return]
@@ -751,9 +780,49 @@ class GovernedTool(BaseTool):
         return await self.inner._arun(*args, **kwargs)
 
 
+#: ``ToolMessage.additional_kwargs`` flag: the message only carries returned artifacts.
+_RETURNED_MARK: Final = "vdreamer_returned_artifacts"
+
+
+def _carry_artifacts(result: Any, tool_call: Mapping[str, Any], name: str) -> Any:
+    """An ``Artifact`` return as a ``ToolMessage`` ``ToolNode`` accepts (step 5 stores it)."""
+    if not _is_artifacts(result):
+        return result
+    return ToolMessage(
+        content="",
+        artifact=result,
+        name=name,
+        tool_call_id=str(tool_call.get("id") or ""),
+        additional_kwargs={_RETURNED_MARK: True},
+    )
+
+
+class ArtifactReturnBridge(GovernedTool):
+    """What the middleware hands ``ToolNode``: the tool itself, with ``Artifact``
+    returns carried in a ``ToolMessage`` — ``ToolNode`` validates the return
+    type before the middleware sees it. No governance of its own: the
+    middleware's pipeline runs around it.
+    """
+
+    async def ainvoke(
+        self, input: Any, config: RunnableConfig | None = None, **kwargs: Any
+    ) -> Any:
+        result = await self.inner.ainvoke(input, config, **kwargs)
+        return _carry_artifacts(result, input if isinstance(input, Mapping) else {}, self.name)
+
+    def invoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
+        result = self.inner.invoke(input, config, **kwargs)
+        return _carry_artifacts(result, input if isinstance(input, Mapping) else {}, self.name)
+
+
+def bridge_artifact_returns(tool: BaseTool) -> BaseTool:
+    """``tool`` wrapped in :class:`ArtifactReturnBridge` (the middleware path)."""
+    return ArtifactReturnBridge.wrap(tool, policy=Policy())
+
+
 def is_governed(tool: Any) -> bool:
     """Whether ``tool`` is already a governance proxy."""
-    return isinstance(tool, GovernedTool)
+    return isinstance(tool, GovernedTool) and not isinstance(tool, ArtifactReturnBridge)
 
 
 class ToolKit:

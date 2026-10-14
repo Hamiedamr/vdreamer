@@ -53,7 +53,12 @@ from typing import TYPE_CHECKING, Any
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from vdreamer.agents import BaseAgent
-from vdreamer.artifacts import InMemoryArtifactStore, UnavailableArtifactStore
+from vdreamer.artifacts import (
+    ArtifactStore,
+    InMemoryArtifactStore,
+    PostgresArtifactStore,
+    UnavailableArtifactStore,
+)
 from vdreamer.discovery import (
     AgentLoadError,
     discover_agents_dir,
@@ -71,6 +76,7 @@ from vdreamer.eventlog import (
 )
 from vdreamer.interrupts import PostgresInterruptStore
 from vdreamer.mcp import MCPRegistry, MCPServerConfig, NetworkAllowlist
+from vdreamer.objects import MINIO_ENDPOINT_ENV, MinioConfigError, MinioObjectStore
 from vdreamer.persistence import (
     PG_DSN_ENV_VAR,
     MissingPostgresDependencyError,
@@ -165,6 +171,31 @@ async def _open_mcp(
 
 
 # ---------------------------------------------------------------------------
+# Artifact storage (serve / worker)
+# ---------------------------------------------------------------------------
+
+
+async def _open_artifact_store(command: str, dsn: str) -> tuple[ArtifactStore, Any]:
+    """``(store, probe)``: Postgres rows + MinIO bytes, or the unavailable store.
+
+    MinIO comes from ``VDREAMER_MINIO_*`` (A23). Without it, artifact routes
+    answer ``404`` and artifact writes fail — said once at boot.
+    """
+    objects = MinioObjectStore.from_env()  # MinioConfigError propagates: half-configured
+    if objects is None:
+        print(f"vdreamer {command}: {MINIO_ENDPOINT_ENV} unset — no artifact storage")
+        return UnavailableArtifactStore(), None
+    store = PostgresArtifactStore(dsn, objects)
+    await store.setup()
+
+    async def probe() -> None:
+        await asyncio.to_thread(objects.probe)
+
+    print(f"vdreamer {command}: artifacts in MinIO bucket {objects.bucket!r}")
+    return store, probe
+
+
+# ---------------------------------------------------------------------------
 # vdreamer worker
 # ---------------------------------------------------------------------------
 
@@ -194,6 +225,7 @@ async def _worker_main(
     await queue.setup()  # boot-time guard; `vdreamer migrate` is the explicit path
     interrupts = PostgresInterruptStore(dsn)
     await interrupts.setup()
+    artifacts, _ = await _open_artifact_store("worker", dsn)
     if metrics_port is not None:
         _start_metrics_server("worker", metrics_host, metrics_port)
 
@@ -214,6 +246,7 @@ async def _worker_main(
                 checkpointer=saver,
                 sink_factory=sink_factory,
                 interrupt_store=interrupts,
+                artifact_store=artifacts,
             )
             print(f"vdreamer worker: agent {agent.name!r} (mode {agent.mode.value})")
             print(f"vdreamer worker: claimant {claimant} — Postgres queue + run_events")
@@ -385,6 +418,12 @@ async def _dev_main(
                 f"sqlite:{db}"
             )
             async with open_sqlite_state(db) as state:
+                expired = await asyncio.to_thread(state.artifacts.objects.sweep)
+                root = state.artifacts.objects.root
+                print(
+                    f"vdreamer dev: objects (artifacts/, inputs/, extracted/) under {root}"
+                    + (f" — removed {expired} past retention" if expired else "")
+                )
                 return await _dev_gateway(agent, checkpointer, state, host, port, tokens, mcp)
         runner = AgentRunner(agent, checkpointer=checkpointer, mcp=mcp)
         queue = InMemoryRunQueue()
@@ -552,6 +591,10 @@ async def _serve_main(
         await log.setup()
     finally:
         await log.close()
+    artifacts, artifacts_probe = await _open_artifact_store("serve", dsn)
+    probes: dict[str, Any] = {}
+    if artifacts_probe is not None:
+        probes["minio"] = artifacts_probe
 
     hub = EventHub()
     listener = PostgresEventListener(dsn, hub)
@@ -566,9 +609,9 @@ async def _serve_main(
             event_writer=store,
             hub=hub,
             interrupts=interrupts,
-            artifacts=UnavailableArtifactStore(),  # the MinIO-backed store is Milestone 6
+            artifacts=artifacts,
             checkpointer=saver,
-            probes={"postgres": queue.probe, "event_listener": listener.probe},
+            probes={"postgres": queue.probe, "event_listener": listener.probe, **probes},
         )
 
         @asynccontextmanager
@@ -620,6 +663,6 @@ def run_serve(
         return 1
     try:
         return asyncio.run(_serve_main(served, dsn, tokens, host, port))
-    except MissingPostgresDependencyError as exc:
+    except (MissingPostgresDependencyError, MinioConfigError) as exc:
         print(f"serve: {exc}", file=sys.stderr)
         return 1

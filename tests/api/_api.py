@@ -229,6 +229,147 @@ class ElicitAgent(BaseAgent):
         return graph
 
 
+def tiny_png(width: int = 3, height: int = 2) -> bytes:
+    """A valid RGB PNG (no imaging library needed)."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * width for _ in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+#: Rows of the ``reports`` agent's table artifact (more than one Parquet page).
+REPORT_ROWS = 2500
+
+
+class ReportState(TypedDict, total=False):
+    text: str
+    refs: dict[str, str]
+
+
+class ReportsAgent(BaseAgent):
+    """Chat: one node emitting every artifact kind (M6), the HTML linking the table."""
+
+    name = "reports"
+    mode = Mode.CHAT
+
+    def build(self, ctx: BuildContext) -> Any:
+        def report(state: ReportState) -> dict[str, Any]:
+            from vdreamer import ArtifactKind, emit_artifact
+
+            rows = (
+                {"i": i, "city": f"c{i % 7}", "score": (i * 37) % 101} for i in range(REPORT_ROWS)
+            )
+            table = emit_artifact("scores", ArtifactKind.TABLE, rows)
+            image = emit_artifact("chart", ArtifactKind.IMAGE, tiny_png())
+            html = emit_artifact(
+                "report",
+                ArtifactKind.HTML,
+                "<html><head><title>Q3 report</title>"
+                '<meta name="description" content="Scores by city">'
+                '<script src="/static/vendor/plotly/plotly.min.js"></script></head>'
+                f'<body><a href="artifact://{table.artifact_id}">data</a>'
+                f'<img src="artifact://{image.artifact_id}"></body></html>',
+            )
+            verdict = emit_artifact(
+                "verdict", ArtifactKind.JSON, {"ok": True}, renderer="verdict.v1"
+            )
+            notes = emit_artifact(
+                "notes", ArtifactKind.FILE, b"plain notes", mime_type="text/plain",
+                filename="notes.txt",
+            )
+            refs = {
+                "table": table.artifact_id,
+                "image": image.artifact_id,
+                "html": html.artifact_id,
+                "json": verdict.artifact_id,
+                "file": notes.artifact_id,
+            }
+            return {"refs": refs}
+
+        graph = StateGraph(ReportState)
+        graph.add_node("report", report)
+        graph.add_edge(START, "report")
+        graph.add_edge("report", END)
+        return graph
+
+
+class ReviewedAgent(BaseAgent):
+    """Chat: emits a table, then waits for a ``reviewer`` (granted-approver access, A8)."""
+
+    name = "reviewed"
+    mode = Mode.CHAT
+
+    def build(self, ctx: BuildContext) -> Any:
+        async def draft(state: GateState) -> dict[str, Any]:
+            from vdreamer import ArtifactKind, aemit_artifact
+
+            ref = await aemit_artifact("draft", ArtifactKind.TABLE, [{"q": "SELECT 1"}])
+            return {"text": ref.artifact_id}
+
+        def gate(state: GateState) -> dict[str, Any]:
+            decision = require_approval(
+                "sql_review", payload={"artifact": state.get("text")}, approver_role="reviewer"
+            )
+            return {"decision": decision}
+
+        graph = StateGraph(GateState)
+        graph.add_node("draft", draft)
+        graph.add_node("gate", gate)
+        graph.add_edge(START, "draft")
+        graph.add_edge("draft", "gate")
+        graph.add_edge("gate", END)
+        return graph
+
+
+class PackageInput(pydantic.BaseModel):
+    site_id: str
+    package: vdreamer.FileRef
+
+
+class UnpackState(TypedDict, total=False):
+    site_id: str
+    package: dict[str, Any]
+    manifest: dict[str, Any]
+
+
+class UnpackAgent(BaseAgent):
+    """Both modes: ``FileRef`` input → ``safe_extract`` → a ``json`` manifest artifact (UC2)."""
+
+    name = "unpack"
+    mode = Mode.BOTH
+    input_schema = PackageInput
+
+    def build(self, ctx: BuildContext) -> Any:
+        def unpack(state: UnpackState) -> dict[str, Any]:
+            from vdreamer import ArtifactKind, FileRef, current_context, emit_artifact
+
+            files = current_context().files
+            ref = FileRef.model_validate(state["package"])
+            manifest = files.safe_extract(ref, allow=["*.txt", "image/*"])
+            first = files.read_bytes(manifest.files[0]) if manifest.files else b""
+            emit_artifact(
+                "manifest", ArtifactKind.JSON, manifest, metadata={"first": first.decode()}
+            )
+            return {"manifest": manifest.model_dump()}
+
+        graph = StateGraph(UnpackState)
+        graph.add_node("unpack", unpack)
+        graph.add_edge(START, "unpack")
+        graph.add_edge("unpack", END)
+        return graph
+
+
 def all_agents() -> dict[str, BaseAgent]:
     agents: list[BaseAgent] = [
         EchoAgent(),
@@ -238,6 +379,9 @@ def all_agents() -> dict[str, BaseAgent]:
         GateAgent(),
         ToolingAgent(),
         ElicitAgent(),
+        ReportsAgent(),
+        ReviewedAgent(),
+        UnpackAgent(),
     ]
     return {agent.name: agent for agent in agents}
 
@@ -289,7 +433,7 @@ def make_stack(
         log = SqliteEventLog(db)
         threads = SqliteThreadStore(db)
         interrupts = SqliteInterruptStore(db)
-        artifacts = SqliteArtifactStore(db, sqlite_path.parent / "artifacts")
+        artifacts = SqliteArtifactStore(db, sqlite_path.parent)
     checkpointer = InMemorySaver()
     backend = GatewayBackend(
         agents=agents,

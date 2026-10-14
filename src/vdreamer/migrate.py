@@ -1,18 +1,21 @@
-"""``vdreamer migrate`` — apply the vdreamer schema (PRD §2.3; M3 WP3, M4).
+"""``vdreamer migrate`` — apply the vdreamer schema (PRD §2.3; M3 WP3, M4, M6).
 
 Creates the vdreamer tables — ``runs`` (:data:`vdreamer.queue.RUNS_DDL`, which
 also upgrades a Milestone-3 table in place), ``run_events``
 (:data:`vdreamer.eventlog.RUN_EVENTS_DDL`), ``threads``
-(:data:`vdreamer.threads.THREADS_DDL`) and ``interrupts``
-(:data:`vdreamer.interrupts.INTERRUPTS_DDL`) — plus the checkpointer's own
+(:data:`vdreamer.threads.THREADS_DDL`), ``interrupts``
+(:data:`vdreamer.interrupts.INTERRUPTS_DDL`) and ``artifacts``
+(:data:`vdreamer.artifacts.ARTIFACTS_DDL`) — plus the checkpointer's own
 tables (``AsyncPostgresSaver.setup()`` runs its
 migrations). Every step is ``CREATE ... IF NOT EXISTS`` idempotent: running
 ``migrate`` again on a migrated database is a no-op.
 
 The DSN comes from the environment only (A23): ``VDREAMER_PG_DSN``, resolved
 by :func:`vdreamer.persistence.dsn_from_env` — never a command-line argument,
-never YAML. Later milestones extend this command as their tables land
-(artifacts, outbox); the DDL constants live beside their writers.
+never YAML. With ``VDREAMER_MINIO_*`` set it also creates the MinIO bucket
+and its 30-day lifecycle rule on ``artifacts/`` and ``extracted/`` (A9).
+Later milestones extend this command as their tables land (outbox); the DDL
+constants live beside their writers.
 """
 
 from __future__ import annotations
@@ -20,8 +23,15 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from vdreamer.artifacts import PostgresArtifactStore, UnavailableArtifactStore
 from vdreamer.eventlog import PostgresEventLog
 from vdreamer.interrupts import PostgresInterruptStore
+from vdreamer.objects import (
+    MINIO_ENDPOINT_ENV,
+    RETENTION_DAYS,
+    MinioConfigError,
+    MinioObjectStore,
+)
 from vdreamer.persistence import (
     PG_DSN_ENV_VAR,
     MissingPostgresDependencyError,
@@ -51,6 +61,15 @@ async def _apply(dsn: str) -> None:
     await PostgresInterruptStore(dsn).setup()
     print("[ok] interrupts table (vdreamer.interrupts.INTERRUPTS_DDL)")
 
+    objects = MinioObjectStore.from_env()
+    await PostgresArtifactStore(dsn, objects or UnavailableArtifactStore().objects).setup()
+    print("[ok] artifacts table (vdreamer.artifacts.ARTIFACTS_DDL)")
+    if objects is None:
+        print(f"[--] MinIO bucket skipped ({MINIO_ENDPOINT_ENV} unset)")
+    else:
+        await asyncio.to_thread(objects.setup)
+        print(f"[ok] MinIO bucket {objects.bucket!r} + {RETENTION_DAYS}-day lifecycle (A9)")
+
     # The checkpointer's migrations are langgraph's to run — reuse the same
     # factory the worker uses so ``migrate`` and ``worker`` never diverge.
     async with open_checkpointer(dsn):
@@ -66,7 +85,7 @@ def run_migrate() -> int:
         return 1
     try:
         asyncio.run(_apply(dsn))
-    except MissingPostgresDependencyError as exc:
+    except (MissingPostgresDependencyError, MinioConfigError) as exc:
         print(f"migrate: {exc}", file=sys.stderr)
         return 1
     print("migrate: PASS")

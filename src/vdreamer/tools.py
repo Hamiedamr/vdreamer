@@ -414,9 +414,13 @@ class VDreamerToolMiddleware(AgentMiddleware[Any, Any, Any]):
 
     @staticmethod
     def _with_context(request: ToolCallRequest, call_ctx: Any) -> ToolCallRequest:
-        """The request whose ``runtime.context`` is the call-scoped context."""
+        """The request whose ``runtime.context`` is the call-scoped context, and whose
+        tool carries ``Artifact`` returns past ``ToolNode``'s type check."""
         from vdreamer.context import VDreamerContext
+        from vdreamer.governance import bridge_artifact_returns
 
+        if request.tool is not None:
+            request = request.override(tool=bridge_artifact_returns(request.tool))
         runtime = request.runtime
         if call_ctx is None or not isinstance(getattr(runtime, "context", None), VDreamerContext):
             return request

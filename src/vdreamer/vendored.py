@@ -4,7 +4,8 @@ No CDN, ever (§5.2): the gateway serves third-party browser assets from the
 wheel itself, under ``/static/vendor/``. Each file is pinned here by sha256 —
 ``vdreamer doctor --offline`` fails when one is missing or modified, which is
 what "vendored assets are covered by the zero-egress checks" means in
-practice. Milestone 4 vendors Swagger UI; Milestone 6 adds the chart JS.
+practice. Milestone 4 vendors Swagger UI; Milestone 6 adds the chart JS
+(plotly.js, at ``/static/vendor/plotly/plotly.min.js``).
 
 The same check asserts the gateway's own docs shell (``docs.html`` and
 ``swagger-init.js``, under ``static/vdreamer/``) references no external
@@ -23,6 +24,8 @@ STATIC_DIR: Final[Path] = Path(__file__).resolve().parent / "gateway" / "static"
 
 #: Third-party files under ``STATIC_DIR / "vendor"`` → sha256 (see each dir's README).
 VENDORED_ASSETS: Final[dict[str, str]] = {
+    "plotly/LICENSE": "ba712274f8336a5f0828c8e2bf639ab8a632c623800a35f96c8b0a67b5f2ab40",
+    "plotly/plotly.min.js": "3b6e15d45dbb7fca5bd2094291e961ddc5472cd887009e6009a56dab668d721f",
     "swagger-ui/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "swagger-ui/favicon-32x32.png": (
         "3ed612f41e050ca5e7000cad6f1cbe7e7da39f65fca99c02e99e6591056e5837"

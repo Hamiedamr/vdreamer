@@ -18,13 +18,16 @@ submodules stay importable for finer-grained access.
 
 from importlib import metadata as importlib_metadata
 
+from vdreamer._extract import ExtractLimits
 from vdreamer.agents import BaseAgent, BuildContext, Mode
 from vdreamer.context import (
     MAX_SNIPPET_CHARS,
+    Artifact,
     ArtifactKind,
     ArtifactRef,
     FileRef,
     VDreamerContext,
+    aemit_artifact,
     bind_context,
     current_context,
     emit_artifact,
@@ -72,6 +75,7 @@ from vdreamer.events import (
     ToolCallPayload,
     ToolResultPayload,
 )
+from vdreamer.files import Files, Manifest, ManifestEntry, SkippedEntry, UnsafeArchiveError
 from vdreamer.persistence import (
     DEFAULT_DURABILITY,
     PG_DSN_ENV_VAR,
@@ -95,6 +99,7 @@ from vdreamer.queue import (
     RunState,
 )
 from vdreamer.runtime import AgentRunner, RunInfo
+from vdreamer.sandbox import Sandbox, SandboxLimits, SandboxResult, SandboxUnavailable
 from vdreamer.streaming import (
     STREAM_DRIVER_ENV_VAR,
     VALID_STREAM_DRIVERS,
@@ -126,6 +131,18 @@ from vdreamer.worker import (
 )
 
 __all__ = [
+    "Artifact",
+    "ExtractLimits",
+    "Files",
+    "Manifest",
+    "ManifestEntry",
+    "Sandbox",
+    "SandboxLimits",
+    "SandboxResult",
+    "SandboxUnavailable",
+    "SkippedEntry",
+    "UnsafeArchiveError",
+    "aemit_artifact",
     "ActiveRunConflict",
     "AgentLoadError",
     "AgentRunner",

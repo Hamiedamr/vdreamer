@@ -11,6 +11,13 @@ Milestone 4 adds the gateway stack (FastAPI, uvicorn, prometheus-client) to
 the guarded imports and the vendored-asset check (§5.2, A13): every file
 under ``static/vendor/`` must match its pinned sha256 and the docs shell must
 reference no external origin (``vdreamer.vendored``).
+
+Milestone 6 adds the artifact/files/sandbox stack to the guarded imports
+(pyarrow, xlsxwriter and the MinIO client too, when their extras are
+installed), the vendored chart JS to the asset check, and a sandbox probe:
+a trivial program through ``vdreamer.sandbox`` under its rlimits, reporting
+whether the network namespace and the dedicated uid took. Windows hosts
+report the sandbox as unavailable (D19) without failing.
 """
 
 from __future__ import annotations
@@ -42,6 +49,8 @@ VERSION_PACKAGES: tuple[str, ...] = (
     "fastapi",
     "uvicorn",
     "fastmcp",
+    "pyarrow",
+    "minio",
 )
 
 
@@ -106,6 +115,37 @@ def _report_versions() -> None:
         print(f"{package}  {version}")
 
 
+def _probe_sandbox() -> str | None:
+    """Run ``print(42)`` in the sandbox (§2.3 "probes … sandbox"); the problem, or ``None``."""
+    import asyncio
+    import sys as _sys
+
+    from vdreamer.sandbox import (
+        SandboxUnavailable,
+        run_confined,
+        scratch_dir,
+        unavailable_reason,
+    )
+
+    reason = unavailable_reason()
+    if reason is not None:
+        print(f"[--] sandbox: unavailable here: {reason}")
+        return None
+    try:
+        with scratch_dir() as scratch:
+            (scratch / "probe.py").write_text("print(42)\n", encoding="utf-8")
+            done = asyncio.run(
+                run_confined([_sys.executable, "-I", "-B", "probe.py"], cwd=scratch, timeout_s=30)
+            )
+    except (SandboxUnavailable, OSError) as exc:
+        return f"sandbox: {exc}"
+    if done.exit_code != 0 or done.stdout.strip() != "42":
+        return f"sandbox: probe failed (exit {done.exit_code}): {done.stderr.strip()[-300:]}"
+    network = "off" if done.network_isolated else "NOT isolated (no namespace permitted)"
+    print(f"[ok] sandbox: probe ran as uid {done.uid}, network {network}")
+    return None
+
+
 def run_offline() -> int:
     """CLI entry point for ``doctor --offline``. 0 = healthy and zero egress."""
     for key, value in OFFLINE_ENV.items():
@@ -130,6 +170,12 @@ def run_offline() -> int:
             from vdreamer.mcp import _import_adapter
 
             _import_adapter()  # langchain.mcp + FastMCP (the mcp extra), M5
+        import vdreamer.files  # noqa: F401 — artifacts, files, sandbox (M6)
+        import vdreamer.sandbox  # noqa: F401
+        import vdreamer.tables  # noqa: F401
+        for optional in ("pyarrow.parquet", "pyarrow.csv", "xlsxwriter", "minio"):
+            if importlib.util.find_spec(optional.split(".", 1)[0]) is not None:
+                importlib.import_module(optional)
     except Exception as exc:
         problems.append(f"stack import failed: {type(exc).__name__}: {exc}")
     finally:
@@ -159,6 +205,10 @@ def run_offline() -> int:
             f"[ok] vendored assets: {len(VENDORED_ASSETS)} file(s) match their sha256; "
             "the docs shell references no external origin"
         )
+
+    sandbox_problem = _probe_sandbox()
+    if sandbox_problem is not None:
+        problems.append(sandbox_problem)
 
     if problems:
         for problem in problems:

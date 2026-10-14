@@ -94,8 +94,8 @@ async def test_artifact_created_payload_shape() -> None:
     assert payload["renderer"] == "verdict.v1"
     assert payload["name"] == "verdict"
     assert payload["artifact_id"].startswith("art_")
-    # M6 seam: no preview/view/download URLs until byte storage lands.
-    assert "preview" not in payload
+    # M6: the encoded preview rides the event; URLs only once a store kept the bytes.
+    assert payload["preview"] == {"body": {"ok": True}}
     assert "view_url" not in payload
 
 

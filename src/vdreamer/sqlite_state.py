@@ -15,8 +15,9 @@ SQLite, so a long history never has to fit in memory.
 
 Artifacts (§3.4) keep their metadata row in ``vdreamer_artifacts`` and their
 bytes on the local filesystem next to the database (D11: "a local filesystem
-store"), at ``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}`` — the same
-key layout MinIO gets in Milestone 6. Bytes are written before the row (D7).
+store"), at ``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}`` — MinIO's
+key layout. Bytes are written before the row (D7). Inbound files sit under
+``inputs/`` in the same directory.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -34,7 +34,7 @@ from typing import Any, Final, TypeVar
 
 import aiosqlite
 
-from vdreamer.artifacts import ArtifactRecord, ArtifactStore
+from vdreamer.artifacts import ArtifactRecord, ArtifactStore, key_of
 from vdreamer.eventlog import READ_PAGE_SIZE, EventHub, EventReader, EventSink, json_text
 from vdreamer.events import EventEnvelope
 from vdreamer.interrupts import (
@@ -42,6 +42,7 @@ from vdreamer.interrupts import (
     InterruptRecord,
     InterruptStatus,
 )
+from vdreamer.objects import FilesystemObjectStore
 from vdreamer.queue import InMemoryRunQueue, RunRecord, RunState
 from vdreamer.threads import InMemoryThreadStore, ThreadRecord
 
@@ -318,57 +319,25 @@ class SqliteEventLog(EventSink, EventReader):
         return [EventEnvelope.model_validate_json(row[0]) for row in rows]
 
 
-_SAFE_PART = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-_EXTENSIONS: Final[dict[str, str]] = {
-    "application/json": "json",
-    "text/plain": "txt",
-    "text/html": "html",
-    "text/csv": "csv",
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/svg+xml": "svg",
-    "application/pdf": "pdf",
-    "application/vnd.apache.parquet": "parquet",
-}
-
-
-def _part(value: str) -> str:
-    """One path segment from a server-made id; anything else is refused."""
-    if not _SAFE_PART.fullmatch(value) or value in (".", ".."):
-        raise ValueError(f"unsafe artifact path segment {value!r}")
-    return value
-
-
 class SqliteArtifactStore(ArtifactStore):
-    """Dev artifacts: rows in ``vdreamer_artifacts``, bytes under ``root`` (D7, D11)."""
+    """Dev artifacts: rows in ``vdreamer_artifacts``, bytes under ``root`` (D7, D11).
+
+    ``root`` is the object root (the ``.db`` file's directory by default), so
+    the bytes land at ``root/artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}``
+    and inbound files at ``root/inputs/…`` — MinIO's key layout on disk.
+    """
 
     _TABLE: Final = "vdreamer_artifacts"
 
     def __init__(self, conn: aiosqlite.Connection, root: str | Path) -> None:
         self._db = conn
-        self._root = Path(root)
+        self.objects: FilesystemObjectStore = FilesystemObjectStore(root)
 
     def object_path(self, record: ArtifactRecord) -> Path:
-        """``{root}/{thread_id}/{run_id}/{artifact_id}.{ext}`` (the §3.4 key layout)."""
-        ext = _EXTENSIONS.get(record.mime_type.split(";", 1)[0].strip().lower(), "bin")
-        return (
-            self._root
-            / _part(record.thread_id)
-            / _part(record.run_id)
-            / f"{_part(record.artifact_id)}.{ext}"
-        )
+        """Where the record's bytes live on disk."""
+        return self.objects.path(key_of(record))
 
-    async def put(self, record: ArtifactRecord, data: bytes | None) -> None:
-        path = self.object_path(record)
-        if data is None:
-            await asyncio.to_thread(path.unlink, missing_ok=True)
-        else:
-
-            def _write() -> None:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-
-            await asyncio.to_thread(_write)
+    async def insert(self, record: ArtifactRecord) -> None:
         await _upsert(self._db, self._TABLE, [(record.artifact_id, record)])
 
     async def get(self, artifact_id: str) -> ArtifactRecord | None:
@@ -377,13 +346,6 @@ class SqliteArtifactStore(ArtifactStore):
         ) as cur:
             row = await cur.fetchone()
         return ArtifactRecord(**json.loads(row[0])) if row is not None else None
-
-    async def read_bytes(self, record: ArtifactRecord) -> bytes | None:
-        path = self.object_path(record)
-        try:
-            return await asyncio.to_thread(path.read_bytes)
-        except FileNotFoundError:
-            return None
 
 
 @dataclass
@@ -403,15 +365,16 @@ async def open_sqlite_state(
     path: str | Path,
     *,
     hub: EventHub | None = None,
-    artifacts_dir: str | Path | None = None,
+    objects_dir: str | Path | None = None,
 ) -> AsyncIterator[SqliteState]:
     """Open the state file, load the persisted records, yield the stores, close.
 
-    Artifact bytes go to ``artifacts_dir`` (default: ``artifacts/`` next to
-    the database file).
+    Objects (artifact bytes under ``artifacts/``, inbound files under
+    ``inputs/``, extracts under ``extracted/``) live in ``objects_dir``,
+    by default the database file's directory.
     """
     conn = await open_state_db(path)
-    root = Path(artifacts_dir) if artifacts_dir is not None else Path(path).parent / "artifacts"
+    root = Path(objects_dir) if objects_dir is not None else Path(path).parent
     try:
         state = SqliteState(
             conn=conn,

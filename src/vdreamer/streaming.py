@@ -696,10 +696,10 @@ class _RunMapper:
     def _artifact_event(self, ns: Sequence[str], data: Mapping[str, Any]) -> EventEnvelope:
         """An ``artifact`` record → ``artifact.created`` (§3.4).
 
-        A record the artifact writer stored (``stored``: bytes and metadata
-        row already written, D7) carries its mime type, size, preview, and the
-        gateway URLs; a buffered ``emit_artifact`` record (bytes land with M6)
-        carries identity and metadata only.
+        Every record carries its mime type, size, and preview; one the store
+        kept (``stored``: bytes and metadata row already written, D7) also
+        carries the gateway URLs. With no store bound (tests, a runner driven
+        without a worker) nothing is servable, so no URLs.
         """
         artifact_id = str(data.get("artifact_id") or f"art_{uuid.uuid4().hex}")
         size = data.get("size_bytes")

@@ -213,36 +213,49 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 
 **Goal:** the artifact system (D6–D8), file inputs, safe extraction, and the sandbox (§3.4–3.5).
 
-**Artifact core**
-- [ ] `emit_artifact(name, kind, data, metadata?, renderer?)` and the `Artifact` return type.
-- [ ] 5 kinds: `table`, `image`, `html`, `json`, `file`. **No auto-detection**: unsupported data → `TypeError`.
-- [ ] Write order (D7): bytes → MinIO `artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}` → metadata row → `artifact.created` event.
-- [ ] Previews per kind: schema + 10 rows + row_count / dimensions / title + summary / ≤64 KB body / filename + mime.
-- [ ] `artifact.created` payload carries the full field set, including `question_id`, `session_id`, `view_url`, `download_url`.
+**Artifact core** (`vdreamer.artifacts`, `vdreamer.artifact_data`, `vdreamer.objects`)
+- [x] `emit_artifact(name, kind, data, metadata?, renderer?)` and the `Artifact` return type. (Plus `aemit_artifact`, the awaitable twin, and keyword-only `mime_type`/`filename` for `file`. `emit_artifact` works in any node or tool: on a sync node's executor thread it hands the write to the run's loop; called from `async def` code it blocks that loop on a helper thread, so async code should prefer `aemit_artifact`. `return Artifact(...)` (or a list, or one as `ToolMessage.artifact` with `response_format="content_and_artifact"`) from a governed tool is stored and the model gets a reference naming the `artifact_id`; it is a LangChain `ToolOutputMixin`, and on the middleware path an `ArtifactReturnBridge` carries it past `ToolNode`'s return-type check.)
+- [x] 5 kinds: `table`, `image`, `html`, `json`, `file`. **No auto-detection**: unsupported data → `TypeError`. (Images must be PNG/JPEG/SVG by magic bytes; `json` takes a Pydantic model or a dict, over 1 MB is a `ValueError`; a `str` is a path for `image`/`file` and content for `html`.)
+- [x] Write order (D7): bytes → MinIO `artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}` → metadata row → `artifact.created` event. (`ArtifactStore` pairs a metadata table with an `ObjectStore`: in-memory for tests, SQLite rows + local filesystem for `vdreamer dev` (D11), Postgres `artifacts` table + MinIO for `serve`/`worker`. The worker binds its store per run; with no store bound the event still flows, without URLs.)
+- [x] Previews per kind: schema + 10 rows + row_count / dimensions / title + summary / ≤64 KB body / filename + mime. (`json` over 64 KB previews as `{"truncated": true}`; the HTML summary is its `<meta name="description">`.)
+- [x] `artifact.created` payload carries the full field set, including `question_id`, `session_id`, `view_url`, `download_url`.
 
-**Tables**
-- [ ] Incremental Parquet row groups.
-- [ ] `/preview?offset&limit&sort` (limit ≤1,000).
-- [ ] `/download?format=csv|xlsx|parquet` with streaming conversion. XLSX beyond 1,048,575 rows → `422`.
-- [ ] `TABLE_MAX_ROWS` 5M, with `metadata.truncated`.
+**Tables** (`vdreamer.tables`; pyarrow and xlsxwriter come with the `[sandbox]` extra)
+- [x] Incremental Parquet row groups. (65,536 rows per group; a row iterator is never held in memory whole.)
+- [x] `/preview?offset&limit&sort` (limit ≤1,000). (`sort=col,-col`, nulls last; unsorted pages read only the row groups they span; an unknown column → `422 invalid_request`.)
+- [x] `/download?format=csv|xlsx|parquet` with streaming conversion. XLSX beyond 1,048,575 rows → `422`. (CSV streams a row group at a time; XLSX is built in constant-memory mode in a temp file, then streamed; a format on a non-table → `422 unsupported_format`.)
+- [x] `TABLE_MAX_ROWS` 5M, with `metadata.truncated`. (`VDREAMER_TABLE_MAX_ROWS` overrides; every table carries `truncated: true|false`.)
 
 **HTML, access, retention**
-- [ ] HTML: `artifact://` links are rewritten to `/raw`. CSP allows no external origins, with `connect-src 'none'`. Chart JS is vendored at `/static/vendor/` (A13).
-- [ ] Access: thread owner, granted approver, or `artifact:read:all` (A8). Retention is 30 days; a missing object returns `410` (A9).
+- [x] HTML: `artifact://` links are rewritten to `/raw`. CSP allows no external origins, with `connect-src 'none'`. Chart JS is vendored at `/static/vendor/` (A13). (Rewritten at serve time. plotly.js 4.1.1 from the `plotly` 7.1.0 wheel, at `/static/vendor/plotly/plotly.min.js`, sha256-pinned and checked by `doctor --offline`. SVG images get the same CSP; every `/raw` sends `X-Content-Type-Options: nosniff`.)
+- [x] Access: thread owner, granted approver, or `artifact:read:all` (A8). Retention is 30 days; a missing object returns `410` (A9). ("Granted approver": a caller holding the `approver_role` of one of the artifact's run interrupts, pending or resolved. Retention: `migrate` installs a MinIO lifecycle rule on `artifacts/` and `extracted/`; `vdreamer dev` sweeps its filesystem store at boot.)
 
-**Files**
-- [ ] `FileRef` + `ctx.files.open(ref)`; the gateway validates the `inputs/` prefix (A17).
-- [ ] `ctx.files.safe_extract(ref, allow=[...]) -> Manifest` (A34, security-critical):
-  - caps on size, entry count, compression ratio; nesting ≤2
-  - rejects traversal, absolute paths, symlinks, encryption
-  - name decoding UTF-8 → CP437 → CP1256
-  - manifest with sha256, plus a listing of skipped types
+**Files** (`vdreamer.files`, `vdreamer._extract`)
+- [x] `FileRef` + `ctx.files.open(ref)`; the gateway validates the `inputs/` prefix (A17). (`FileRef` refuses any other prefix and any key that could climb out of it, so input validation answers `422 invalid_input`. `ctx.files` — on the run context, next to `ctx.sandbox` — reads `inputs/` and the run's own `extracted/` keys only: `open`, `read_bytes`, and their async twins.)
+- [x] `ctx.files.safe_extract(ref, allow=[...]) -> Manifest` (A34, security-critical):
+  - caps on size, entry count, compression ratio; nesting ≤2 (counted while inflating, never from headers; defaults 256 MB per file, 1 GB total, 10,000 entries, 100:1 above 1 MB; `ExtractLimits` overrides)
+  - rejects traversal, absolute paths, symlinks, encryption (the whole archive, `UnsafeArchiveError` with a stable `code`; also control characters, corrupt or unsupported members)
+  - name decoding UTF-8 → CP437 → CP1256 (CP437 wins only when every high byte is one of its accented letters)
+  - manifest with sha256, plus a listing of skipped types (`allow` takes filename globs and mime patterns; kept files land at `extracted/{thread_id}/{run_id}/…`; archive paths never touch the disk, outputs are numbered files)
+  - runs in the sandbox: `python -I -m vdreamer._extract` under the sandbox launcher (rlimits, uid, no network); Windows dev hosts run the same child without the launcher, since the caps are enforced in its own code.
 
-**Sandbox**
-- [ ] `ctx.sandbox.run(code, inputs, timeout_s=60)` (D19/A19, Unix-only): dedicated uid, rlimits (CPU, 2 GB memory, file size, nproc), wiped scratch dir, empty env, network off where possible. Files written to `./out/` become artifacts.
-- [ ] The sandbox interpreter is the worker environment's Python. pandas, pyarrow, matplotlib, plotly, and numpy come from the `sandbox` extra.
+**Sandbox** (`vdreamer.sandbox`, `vdreamer._sandbox_launch`)
+- [x] `ctx.sandbox.run(code, inputs, timeout_s=60)` (D19/A19, Unix-only): dedicated uid, rlimits (CPU, 2 GB memory, file size, nproc), wiped scratch dir, empty env, network off where possible. Files written to `./out/` become artifacts. (A fresh single-threaded launcher applies the limits and `execve`s — no `preexec_fn` in the threaded worker. `VDREAMER_SANDBOX_UID` names the uid (the worker must be root); without it the worker's own uid is used and `RLIMIT_NPROC` is skipped (it counts the whole uid). Network: a new network namespace as root, else an unprivileged user+network namespace. The process group, and with a dedicated uid every process of that uid, is killed at the timeout. Outputs map by extension (PNG/JPEG/SVG → `image`, HTML → `html`, JSON objects → `json`, Parquet/CSV → `table`, else `file`); symlinks, hard links and special files are skipped. `arun` is the async twin; Windows raises `SandboxUnavailable`.)
+- [x] The sandbox interpreter is the worker environment's Python. pandas, pyarrow, matplotlib, plotly, and numpy come from the `sandbox` extra. (`sys.executable -I -B`; the env holds only sandbox-local `HOME`/`TMPDIR`/`MPLCONFIGDIR`, `MPLBACKEND=Agg` and single-threaded BLAS.)
 
-**Exit:** the sandbox executes untrusted code with rlimits verified; `safe_extract` defeats the traversal/zip-bomb test corpus; artifacts render end-to-end through the gateway proxy.
+**Exit:** ✅ verified.
+- The sandbox runs untrusted code with its rlimits verified (`tests/artifacts/test_sandbox.py`, run in a `python:3.11-slim` Linux container as root with dedicated uid 4242, and again as an unprivileged worker). Verified:
+  - the CPU, address-space, file-size, open-file, core and nproc limits are applied;
+  - a 3 GB allocation dies with `MemoryError`, and an oversized write is stopped;
+  - a spinning child is killed at the timeout;
+  - the env is empty, and the network namespace leaves no route out;
+  - the sandbox uid cannot read the worker's files;
+  - `out/` symlinks and hard links are skipped.
+- `safe_extract` defeats the traversal/zip-bomb corpus (`tests/artifacts/test_safe_extract_corpus.py`, 25 cases: traversal, absolute paths, symlinks, encryption, a 1000:1 bomb, lying size headers, an overlapping-entry bomb, too many entries, a quine-style nest, corrupt members), plus `FileRef` → `safe_extract` through the REST surface (`tests/api/test_files_api.py`).
+- Artifacts render end-to-end through the gateway proxy (`tests/api/test_artifacts_e2e.py`, both store backends: every kind's preview and field set, paged/sorted previews, CSV/XLSX/Parquet, the XLSX `422`, HTML rewriting under the CSP with the vendored chart JS, granted-approver access, `410` after the object is gone).
+- MinIO: `MinioObjectStore` round-trip and the 30-day lifecycle rule ran live against an S3 server (`tests/artifacts/test_object_stores.py`; moto's S3 server in the container, since MinIO no longer publishes a public image) — not yet against MinIO itself.
+- Checked in a real `vdreamer dev` process: a bad `FileRef` → `422`; extract → manifest; a sorted page of a 5,000-row table; CSV export; HTML rewritten; the bytes under `artifacts/`, `extracted/`, `inputs/` next to the `.db`.
+- Full suite: 615 passed, 20 skipped; ruff and mypy (strict) clean; `doctor --offline` green (it now imports the artifact stack under the egress guard, pins the chart JS, and probes the sandbox). The smoke set (now including the D7-order and artifact-return runs) and the M6 suites pass on the floor pins.
 
 ---
 

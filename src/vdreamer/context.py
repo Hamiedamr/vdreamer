@@ -6,30 +6,59 @@ Milestone 1 scope:
   channel (``create_agent`` graphs declare ``context_schema=VDreamerContext``)
   *and* a module-level ``ContextVar``, so the implicit helpers below resolve
   the current run in any node or tool without parameters (PRD §2.2 line 70).
-- ``emit_progress`` / ``emit_log`` / ``emit_artifact`` / ``emit_citation`` —
-  buffer one protocol record (PRD §3.3 payload shapes) into
-  ``VDreamerContext.pending``; the worker event pipeline that drains,
-  envelopes, and persists ``pending`` lands in Milestone 2.
+- ``emit_progress`` / ``emit_log`` / ``emit_citation`` — buffer one protocol
+  record (PRD §3.3 payload shapes) into ``VDreamerContext.pending`` and
+  mirror it into the run's stream. ``emit_artifact`` lives in
+  ``vdreamer.artifacts`` (it stores bytes first, D7) and is re-exported here.
 - ``require_approval`` — the HITL gate (PRD §4.1): one normalized interrupt
   value shared by every approval source (A44).
 
-Deferred: artifact byte storage, MinIO writes, metadata rows, and the
-``artifact.created`` write order (D7) — Milestone 6. ``FileRef`` prefix
-validation (``inputs/``, A17) is the gateway's, Milestone 5.
+Since Milestone 6 the context also carries ``ctx.files`` (inbound files,
+``safe_extract``) and ``ctx.sandbox`` (D19); ``FileRef`` validates its
+``inputs/`` prefix (A17).
 """
 
 from __future__ import annotations
 
 import contextlib
 import contextvars
-import enum
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pydantic
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
+
+from vdreamer.artifacts import (
+    Artifact,
+    ArtifactKind,
+    ArtifactRef,
+    aemit_artifact,
+    emit_artifact,
+)
+
+if TYPE_CHECKING:
+    from vdreamer.files import Files
+    from vdreamer.sandbox import Sandbox
+
+__all__ = [
+    "Artifact",
+    "ArtifactKind",
+    "ArtifactRef",
+    "FileRef",
+    "VDreamerContext",
+    "aemit_artifact",
+    "bind_context",
+    "current_context",
+    "current_context_or_none",
+    "emit_artifact",
+    "emit_citation",
+    "emit_log",
+    "emit_progress",
+    "emit_record",
+    "require_approval",
+]
 
 #: PRD §3.3: citation snippets are capped at 300 characters.
 MAX_SNIPPET_CHARS = 300
@@ -38,34 +67,31 @@ MAX_SNIPPET_CHARS = 300
 DEFAULT_APPROVAL_ACTIONS: tuple[str, ...] = ("approve", "reject", "edit", "feedback")
 
 
-class ArtifactKind(enum.StrEnum):
-    """The five artifact kinds (PRD §3.4)."""
-
-    TABLE = "table"
-    IMAGE = "image"
-    HTML = "html"
-    JSON = "json"
-    FILE = "file"
-
-
 class FileRef(pydantic.BaseModel):
-    """A MinIO key under ``inputs/`` (PRD §2.2, A17).
+    """An inbound file: a MinIO key under ``inputs/`` (PRD §2.2, §3.5, A17).
 
-    The gateway validates the ``inputs/`` prefix later; the SDK model is a
-    plain carrier for now.
+    Upstream systems upload to ``inputs/`` and pass the key in a run's input;
+    validation refuses any other prefix and any key that could climb out of
+    it (``..``, a leading ``/``, backslashes) — so the gateway, which
+    validates every input against the agent's ``input_schema``, rejects a
+    ref that points at another thread's artifacts with ``422`` (A17). Agents
+    read the file with ``ctx.files.open(ref)``.
     """
 
     object_key: str
 
+    @pydantic.field_validator("object_key")
+    @classmethod
+    def _inputs_prefix(cls, value: str) -> str:
+        from vdreamer.objects import INPUTS_PREFIX, ObjectKeyError, check_key
 
-class ArtifactRef(pydantic.BaseModel):
-    """What ``emit_artifact`` returns: identity and display hints, never bytes."""
-
-    artifact_id: str
-    name: str
-    kind: ArtifactKind
-    mime_type: str | None = None
-    size_bytes: int | None = None
+        try:
+            check_key(value)
+        except ObjectKeyError:
+            raise ValueError("object_key must be a clean relative key (A17)") from None
+        if not value.startswith(INPUTS_PREFIX) or value == INPUTS_PREFIX:
+            raise ValueError(f"object_key must be under {INPUTS_PREFIX!r} (A17)")
+        return value
 
 
 class VDreamerContext(pydantic.BaseModel):
@@ -89,6 +115,20 @@ class VDreamerContext(pydantic.BaseModel):
     idempotency_key: str | None = None
     attempt: int = 0
     pending: list[dict[str, Any]] = pydantic.Field(default_factory=list)
+
+    @property
+    def files(self) -> Files:
+        """Inbound files and ``safe_extract`` (§3.5): ``ctx.files.open(ref)``."""
+        from vdreamer.files import Files
+
+        return Files(self)
+
+    @property
+    def sandbox(self) -> Sandbox:
+        """The code sandbox (§3.5, D19): ``ctx.sandbox.run(code, inputs)``."""
+        from vdreamer.sandbox import Sandbox
+
+        return Sandbox(self)
 
 
 #: The active run, or ``None`` outside a vdreamer-driven invocation.
@@ -181,49 +221,6 @@ def emit_log(message: str, level: str = "info") -> None:
     """Emit a ``log`` record (PRD §3.3): ``{level, message}``."""
     record = {"type": "log", "level": level, "message": message}
     emit_record(record)
-
-
-def emit_artifact(
-    name: str,
-    kind: ArtifactKind,
-    data: Any,
-    metadata: dict[str, Any] | None = None,
-    renderer: str | None = None,
-) -> ArtifactRef:
-    """Buffer an artifact and return its ref (PRD §3.4).
-
-    Generates ``artifact_id`` and appends the full record — ``data`` included —
-    to the current run's ``pending`` buffer; the returned ``ArtifactRef`` is
-    what agent code hands to the model or writes into state.
-
-    ``data`` is *not* validated per-kind yet; that strictness (Parquet tables,
-    mime sniffing, size caps — PRD §3.4) lands with Milestone 6. Two things are
-    enforced now: ``kind`` must be an ``ArtifactKind`` member and ``data`` must
-    not be ``None`` — both ``TypeError``, matching the §3.4 rule that
-    unsupported data is a caller error, never auto-detected.
-
-    Byte storage, MinIO writes, the metadata row, and the ``artifact.created``
-    event with its write order (D7) land in Milestone 6; Milestone 1 is the SDK
-    surface. ``renderer`` is an optional UI hint (e.g. ``verdict.v1``).
-    """
-    if not isinstance(kind, ArtifactKind):
-        raise TypeError(
-            f"kind must be an ArtifactKind member (table/image/html/json/file), got {kind!r}"
-        )
-    if data is None:
-        raise TypeError("artifact data must not be None")
-    artifact_id = f"art_{uuid.uuid4().hex}"
-    record = {
-        "type": "artifact",
-        "artifact_id": artifact_id,
-        "name": name,
-        "kind": kind,
-        "data": data,
-        "metadata": metadata,
-        "renderer": renderer,
-    }
-    emit_record(record)
-    return ArtifactRef(artifact_id=artifact_id, name=name, kind=kind)
 
 
 def emit_citation(

@@ -205,11 +205,21 @@ class ArtifactOut(BaseModel):
 
 
 class ArtifactPreview(BaseModel):
+    """The stored preview; for tables also one page of rows (§3.4 ``/preview``)."""
+
     artifact_id: str
     kind: str
     preview: dict[str, Any]
     offset: int
     limit: int
+    sort: str | None = None
+    columns: list[dict[str, str]] | None = Field(
+        default=None, description="Tables: ``[{name, type}]``."
+    )
+    rows: list[dict[str, Any]] | None = Field(
+        default=None, description="Tables: the requested page of rows."
+    )
+    row_count: int | None = Field(default=None, description="Tables: total rows.")
 
 
 # -- ops -------------------------------------------------------------------------
