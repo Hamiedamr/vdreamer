@@ -45,7 +45,8 @@ Users are AI developers only. vdreamer ships no frontend code. Client apps integ
 
 ## Layout (from the PRD; ✓ = exists today)
 
-- One OCI image, two entrypoints: `vdreamer serve` (gateway ✓) and `vdreamer worker` (✓). `vdreamer dev` (✓) runs gateway + worker in one process on SQLite checkpoints and in-memory stores (D11); `serve`/`worker` use Postgres (✓) + MinIO (M6).
+- One OCI image, two entrypoints: `vdreamer serve` (gateway ✓) and `vdreamer worker` (✓). `vdreamer dev` (✓) runs gateway + worker in one process with every store (runs, events, threads, interrupts, checkpoints) in one SQLite `--db` file (`sqlite_state.py`, D11); `serve`/`worker` use Postgres (✓) + MinIO (M6).
+- **Testing phase is SQLite-first (decided 2026-10-14):** developers test on `vdreamer dev` + SQLite; Postgres comes back after that testing. Keep the Postgres stores compiling and covered by their offline tests, but don't treat a live-Postgres run as a blocker. New stores need an in-memory twin (and SQLite persistence for dev) behind the same ABC.
 - CLI surface: `dev` ✓, `serve` ✓, `worker` ✓, `run` (terminal client, M11), `validate` ✓, `migrate` ✓, `export-schema` (also emits the conformance kit, M10), `doctor --offline` ✓, `bundle` (M10).
 - REST under `/api/v1` ✓; SSE with `Last-Event-ID` replay ✓; artifact bytes in MinIO (M6), state/metadata in Postgres.
 - Gateway config is env-only (A23): `VDREAMER_PG_DSN`, `VDREAMER_INTERNAL_TOKEN` (+ `VDREAMER_INTERNAL_TOKEN_PREVIOUS` for rotation, A14). `--host` refuses wildcard binds.

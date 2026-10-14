@@ -174,11 +174,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     dev_parser = subparsers.add_parser(
         "dev",
-        help="single-process dev mode: SQLite + in-memory queue (D11)",
+        help="single-process dev mode: gateway + worker on one SQLite file (D11)",
         description=(
             "Run everything in one process with no infrastructure: the agent's "
-            "checkpoints on a local SQLite file (D11), the queue, threads, events and "
-            "interrupts in memory. With --input, enqueue and drive exactly one run and "
+            "runs, events, threads, interrupts and checkpoints on one local SQLite "
+            "file (D11), surviving restarts. With --input, enqueue and drive exactly one run and "
             "report the outcome (a smoke of the whole lifecycle); without it, serve the "
             "REST/SSE gateway and run the worker loop until Ctrl-C. The token comes from "
             "VDREAMER_INTERNAL_TOKEN, or a one-off token is printed. Hot reload is future "
@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--db",
         metavar="PATH",
         default="./.vdreamer/dev.db",
-        help="SQLite checkpoint file (default ./.vdreamer/dev.db)",
+        help="SQLite state + checkpoint file (default ./.vdreamer/dev.db)",
     )
     dev_parser.add_argument(
         "--input",

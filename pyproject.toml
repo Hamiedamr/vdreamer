@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 # A41: supported range is langchain 1.4+ and langgraph 1.2+ within 1.x; a 2.0 of
 # either dependency requires a vdreamer major version.
 dependencies = [
+    "aiosqlite>=0.20",
     "fastapi>=0.143.0",
     "langchain>=1.4,<2",
     "langgraph>=1.2,<2",

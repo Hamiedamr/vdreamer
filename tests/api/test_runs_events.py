@@ -161,7 +161,7 @@ def test_cancel_a_queued_run_writes_the_final_event(client: TestClient, stack: S
     assert response.status_code == 202
     assert response.json()["status"] == "cancelled"
     # No worker held the run, so the gateway authored its last word.
-    (event,) = stack.log.events_for(run_id)
+    (event,) = asyncio.run(stack.log.read(run_id))
     assert event.type is EventType.RUN_STATUS and event.payload["status"] == "cancelled"
     assert_error(
         client.post(f"/api/v1/runs/{run_id}/cancel", headers=headers()), 409, "run_not_active"
@@ -177,7 +177,7 @@ def test_cancel_a_running_run_leaves_the_event_to_its_worker(
     asyncio.run(stack.queue.claim("w1"))
     response = client.post(f"/api/v1/runs/{run_id}/cancel", headers=headers())
     assert response.status_code == 202 and response.json()["status"] == "cancelled"
-    assert stack.log.events_for(run_id) == ()  # the worker drains and writes it
+    assert asyncio.run(stack.log.read(run_id)) == []  # the worker drains and writes it
 
 
 # -- SSE ---------------------------------------------------------------------------------

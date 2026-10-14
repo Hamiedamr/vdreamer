@@ -13,11 +13,14 @@ transport), drives them through the agent's runner, writes the protocol
 events to the ``run_events`` log, and records interrupts for the gateway's
 inbox. ``--metrics-port`` exposes its Prometheus metrics (§5.4).
 
-``dev`` is the D11 single-process mode: one process, the agent's
-checkpoints on SQLite (a local ``--db`` file) and everything else in memory.
-With ``--input`` it smokes one run through enqueue → claim → drive → settle;
-without it, it serves the full gateway *and* runs the worker loop in the same
-process, so the REST/SSE contract works locally with no infrastructure. Hot
+``dev`` is the D11 single-process mode on one local SQLite ``--db`` file.
+With ``--input`` it smokes one run through enqueue → claim → drive → settle
+(checkpoints on SQLite, the rest in memory); without it, it serves the full
+gateway *and* runs the worker loop in the same process, with runs, events,
+threads, interrupts, and checkpoints all persisted to that file
+(``vdreamer.sqlite_state``), so the REST/SSE contract works locally with no
+infrastructure and survives a restart. The testing phase runs on this mode;
+the Postgres ``serve``/``worker`` topology is the later migration. Hot
 reload (PRD §2.3's "single-process hot reload") is future work; ``dev``
 builds the agent once, like the worker.
 
@@ -36,7 +39,6 @@ import secrets
 import signal
 import socket
 import sys
-import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -56,13 +58,12 @@ from vdreamer.discovery import (
 from vdreamer.eventlog import (
     EventHub,
     EventSink,
-    InMemoryEventLog,
     InMemoryEventSink,
     PostgresEventListener,
     PostgresEventLog,
     PostgresEventStore,
 )
-from vdreamer.interrupts import InMemoryInterruptStore, PostgresInterruptStore
+from vdreamer.interrupts import PostgresInterruptStore
 from vdreamer.persistence import (
     PG_DSN_ENV_VAR,
     MissingPostgresDependencyError,
@@ -72,7 +73,8 @@ from vdreamer.persistence import (
 )
 from vdreamer.queue import InMemoryRunQueue, PostgresRunQueue, RunState
 from vdreamer.runtime import AgentRunner
-from vdreamer.threads import InMemoryThreadStore, PostgresThreadStore
+from vdreamer.sqlite_state import SqliteState, open_sqlite_state
+from vdreamer.threads import PostgresThreadStore
 from vdreamer.worker import Worker
 
 if TYPE_CHECKING:
@@ -232,14 +234,24 @@ async def _open_dev_checkpointer(db: str) -> AsyncIterator[AsyncSqliteSaver]:
 
 
 async def _dev_gateway(
-    agent: BaseAgent, checkpointer: Any, host: str, port: int, tokens: tuple[str, ...]
+    agent: BaseAgent,
+    checkpointer: Any,
+    state: SqliteState,
+    host: str,
+    port: int,
+    tokens: tuple[str, ...],
 ) -> int:
-    """``vdreamer dev`` without ``--input``: gateway + worker loop in one process (D11)."""
+    """``vdreamer dev`` without ``--input``: gateway + worker loop in one process (D11).
+
+    Runs, events, threads, and interrupts live in ``state`` — the same SQLite
+    file as the checkpoints — so a restart resumes where the last process
+    stopped (the testing phase runs on SQLite, not Postgres).
+    """
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
 
-    queue = InMemoryRunQueue(clock=time.time)  # wall clock: the API shows timestamps
-    log = InMemoryEventLog()
-    interrupts = InMemoryInterruptStore()
+    queue = state.queue
+    log = state.events
+    interrupts = state.interrupts
     runner = AgentRunner(agent, checkpointer=checkpointer)
 
     async def sink_factory(run_id: str) -> EventSink:
@@ -258,7 +270,7 @@ async def _dev_gateway(
     backend = GatewayBackend(
         agents={agent.name: agent},
         queue=queue,
-        threads=InMemoryThreadStore(),
+        threads=state.threads,
         event_reader=log,
         event_writer=log,
         hub=log.hub,
@@ -305,8 +317,9 @@ async def _dev_main(
     async with _open_dev_checkpointer(db) as checkpointer:
         if input_json is None:
             print(f"vdreamer dev: agent {agent.name!r} (mode {agent.mode.value})")
-            print(f"vdreamer dev: queue/events/threads in memory, checkpoints=sqlite:{db}")
-            return await _dev_gateway(agent, checkpointer, host, port, tokens)
+            print(f"vdreamer dev: runs/events/threads/interrupts/checkpoints=sqlite:{db}")
+            async with open_sqlite_state(db) as state:
+                return await _dev_gateway(agent, checkpointer, state, host, port, tokens)
         runner = AgentRunner(agent, checkpointer=checkpointer)
         queue = InMemoryRunQueue()
         worker = Worker(

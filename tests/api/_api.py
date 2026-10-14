@@ -1,6 +1,8 @@
-"""REST contract kit (Milestone 4): an in-memory gateway, with or without workers.
+"""REST contract kit (Milestone 4): an in-process gateway, with or without workers.
 
-Two stacks, both over the same in-memory twins ``vdreamer dev`` uses:
+Every stack runs over either store backend (``store``): the in-memory twins,
+or the SQLite stores ``vdreamer dev`` persists to (``sqlite_state``) — the
+fixtures run each test against both. Two stacks:
 
 - ``client`` — the gateway alone: runs stay ``queued`` (no worker claims them),
   so route contracts are deterministic;
@@ -17,8 +19,10 @@ import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypedDict
 
+import aiosqlite
 import pydantic
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -32,6 +36,13 @@ from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
 from vdreamer.interrupts import InMemoryInterruptStore
 from vdreamer.queue import InMemoryRunQueue
 from vdreamer.runtime import AgentRunner
+from vdreamer.sqlite_state import (
+    SqliteEventLog,
+    SqliteInterruptStore,
+    SqliteRunQueue,
+    SqliteThreadStore,
+    open_state_db,
+)
 from vdreamer.threads import InMemoryThreadStore
 from vdreamer.worker import Worker
 
@@ -152,19 +163,43 @@ class Stack:
     app: FastAPI
     backend: GatewayBackend
     queue: InMemoryRunQueue
-    log: InMemoryEventLog
+    log: InMemoryEventLog | SqliteEventLog
     threads: InMemoryThreadStore
     interrupts: InMemoryInterruptStore
     artifacts: InMemoryArtifactStore
     checkpointer: InMemorySaver
+    db: aiosqlite.Connection | None = None
+
+    def close(self) -> None:
+        if self.db is not None:
+            asyncio.run(self.db.close())
 
 
-def make_stack(*, workers: bool, heartbeat_s: float = 0.2) -> Stack:
+def make_stack(
+    *, workers: bool, heartbeat_s: float = 0.2, sqlite_path: Path | None = None
+) -> Stack:
+    """A gateway stack; ``sqlite_path`` switches every store to the SQLite backend.
+
+    aiosqlite resolves each call on the caller's own loop, so the stores work
+    from the TestClient's loop and from the tests' ``asyncio.run`` alike.
+    """
     agents = all_agents()
-    queue = InMemoryRunQueue(clock=time.time)
-    log = InMemoryEventLog()
-    threads = InMemoryThreadStore()
-    interrupts = InMemoryInterruptStore()
+    queue: InMemoryRunQueue
+    log: InMemoryEventLog | SqliteEventLog
+    threads: InMemoryThreadStore
+    interrupts: InMemoryInterruptStore
+    db = None
+    if sqlite_path is None:
+        queue = InMemoryRunQueue(clock=time.time)
+        log = InMemoryEventLog()
+        threads = InMemoryThreadStore()
+        interrupts = InMemoryInterruptStore()
+    else:
+        db = asyncio.run(open_state_db(sqlite_path))
+        queue = SqliteRunQueue(db)
+        log = SqliteEventLog(db)
+        threads = SqliteThreadStore(db)
+        interrupts = SqliteInterruptStore(db)
     artifacts = InMemoryArtifactStore()
     checkpointer = InMemorySaver()
     backend = GatewayBackend(
@@ -184,7 +219,7 @@ def make_stack(*, workers: bool, heartbeat_s: float = 0.2) -> Stack:
 
         @contextlib.asynccontextmanager
         async def lifespan() -> AsyncIterator[None]:
-            async def sink_factory(run_id: str) -> InMemoryEventLog:
+            async def sink_factory(run_id: str) -> InMemoryEventLog | SqliteEventLog:
                 return log
 
             stop = asyncio.Event()
@@ -213,7 +248,7 @@ def make_stack(*, workers: bool, heartbeat_s: float = 0.2) -> Stack:
         GatewaySettings(tokens=(TOKEN, PREVIOUS_TOKEN), heartbeat_s=heartbeat_s),
         lifespan=lifespan,
     )
-    return Stack(app, backend, queue, log, threads, interrupts, artifacts, checkpointer)
+    return Stack(app, backend, queue, log, threads, interrupts, artifacts, checkpointer, db)
 
 
 # -- helpers --------------------------------------------------------------------------------

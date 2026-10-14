@@ -295,7 +295,10 @@ def test_inbox_visibility_and_limit_are_store_side(client: TestClient, stack: St
     from vdreamer.interrupts import Viewer
 
     gated = _seed(stack, approver_role="dba", initiator_id="carol")
-    own = [_seed(stack, thread_id=f"t-own-{i}") for i in range(3)]
+    # Distinct created_at: back-to-back time.time() calls tie on Windows (~16 ms
+    # resolution), and a tie orders by the random interrupt id.
+    base = time.time()
+    own = [_seed(stack, thread_id=f"t-own-{i}", created_at=base + i) for i in range(3)]
     dana = Viewer(user_id="dana", roles=("dba",))
     visible = asyncio.run(stack.interrupts.list(visible_to=dana))
     assert [r.interrupt_id for r in visible] == [gated.interrupt_id]

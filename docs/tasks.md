@@ -166,7 +166,12 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 - `claim()` had no agent filter: with several agents on one database, any worker claimed any agent's run.
 - Recovered/released runs re-drove their input from the start. The worker now resumes from the run's own checkpoint (`RUN_ID_CONFIGURABLE_KEY` in the checkpoint metadata), so completed nodes no longer re-run; the M3 exit test now pins that.
 
-**Exit:** ✅ verified — `uv run pytest tests/api` green (98 passed; 5 live-Postgres tests skip without `VDREAMER_TEST_PG_DSN`) and covers every route, including auth failures and every error code; `/api/v1/openapi.json` is valid OpenAPI 3.1 (`openapi-spec-validator`) and lists exactly the §2.5 route table; `/api/v1/docs` renders from vendored assets, and its served HTML is asserted to carry the CSP and no external URL. Full suite: 377 passed, 10 skipped; ruff + mypy (strict) clean; `doctor --offline` green. Still owed: a live-Postgres run of the new stores (no Postgres on the dev host).
+**SQLite testing phase** (decided after M4: test on SQLite, migrate to Postgres after heavy developer testing)
+- [x] `vdreamer.sqlite_state`: SQLite run queue, event log, thread and interrupt stores. Runs/threads/interrupts write through their in-memory twins (one copy of the semantics); the event log is read straight from SQLite. `vdreamer dev` keeps everything in its `--db` file, next to the checkpoints, and a run left `running` by a dead process is recovered by the boot sweep.
+- [x] `tests/api` runs every stack-based contract test against both the in-memory and the SQLite stores; `tests/test_sqlite_state.py` covers restart survival. Verified in a real process: a completed run, its thread values, and its SSE replay survive a `vdreamer dev` restart.
+- [ ] Postgres migration, after developer testing: run the live-PG tests (`VDREAMER_TEST_PG_DSN`) and switch deployments to `serve` + `worker`.
+
+**Exit:** ✅ verified — `uv run pytest tests/api` green (98 passed; 5 live-Postgres tests skip without `VDREAMER_TEST_PG_DSN`) and covers every route, including auth failures and every error code; `/api/v1/openapi.json` is valid OpenAPI 3.1 (`openapi-spec-validator`) and lists exactly the §2.5 route table; `/api/v1/docs` renders from vendored assets, and its served HTML is asserted to carry the CSP and no external URL. Full suite: 377 passed, 10 skipped; ruff + mypy (strict) clean; `doctor --offline` green. Still owed: a live-Postgres run of the new stores — deferred to the Postgres migration (see the SQLite testing phase above).
 
 ---
 

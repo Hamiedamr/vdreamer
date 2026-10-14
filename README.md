@@ -23,7 +23,7 @@ uv run vdreamer validate pinger:agent # smoke agent; needs examples/smoke on PYT
 uv run vdreamer doctor --offline      # asserts zero egress
 ```
 
-To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input`: it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, with checkpoints on SQLite. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
+To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input`: it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, keeping runs, events, threads, approvals and checkpoints in one SQLite file (`--db`, default `./.vdreamer/dev.db`), so a restart picks up where it stopped. The current testing phase runs on this mode; the Postgres topology below comes later. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
 
 ```
 PYTHONPATH=examples/smoke uv run vdreamer dev --agent pinger:agent --port 8000
