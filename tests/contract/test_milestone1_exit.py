@@ -158,5 +158,7 @@ async def test_milestone1_exit_criterion() -> None:
         "interrupt_policies",
         "durability",
         "agent_kwargs",
+        "tools.governed",  # Milestone 5
+        "approval.routes",
     ]
     assert [(check.name, check.detail) for check in checks if not check.ok] == []

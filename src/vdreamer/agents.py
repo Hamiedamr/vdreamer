@@ -26,6 +26,7 @@ from typing import Any
 import pydantic
 
 from vdreamer.context import VDreamerContext
+from vdreamer.governance import ToolKit
 from vdreamer.persistence import DEFAULT_DURABILITY, Durability
 from vdreamer.tools import InterruptPolicy, Policy, VDreamerToolMiddleware
 
@@ -46,32 +47,42 @@ class BuildContext:
     caches the graph ("build() runs once per worker", §2.2). ``settings``
     carries deployment config; ``models`` / ``resources`` are the alias
     wiring (populated when ``models.yaml`` / ``resources.yaml`` resolution
-    lands, Milestone 7); ``tools`` / ``checkpointer`` / ``store`` are the
-    runtime wiring ``agent_kwargs()`` forwards to prebuilt agents.
+    lands, Milestone 7); ``checkpointer`` / ``store`` are the runtime wiring
+    ``agent_kwargs()`` forwards to prebuilt agents.
+
+    ``tools`` is the :class:`~vdreamer.governance.ToolKit` (§2.7):
+    ``ctx.tools.govern(tools)`` and ``ctx.tools.mcp(server, include=[...])``.
+    ``tool_policies`` are the agent's own (``BaseAgent.tool_policies``), applied
+    by both the toolkit and the ``agent_kwargs()`` middleware.
     """
 
     settings: Mapping[str, Any] = field(default_factory=dict)
     models: Mapping[str, Any] = field(default_factory=dict)
     resources: Mapping[str, Any] = field(default_factory=dict)
-    tools: Any = None
+    tools: ToolKit = None  # type: ignore[assignment]  # filled in __post_init__
     checkpointer: Any = None
     store: Any = None
+    tool_policies: Mapping[str, Policy] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.tools is None:
+            self.tools = ToolKit(self.tool_policies)
 
     def agent_kwargs(self) -> dict[str, Any]:
         """``create_agent`` / ``create_deep_agent`` kwargs (PRD §2.4).
 
         Supplies exactly ``{checkpointer, store, context_schema:
-        VDreamerContext, middleware: [VDreamerToolMiddleware()]}`` — the
+        VDreamerContext, middleware: [VDreamerToolMiddleware(...)]}`` — the
         run-context schema (nodes read the run through ``runtime.context``)
-        plus tool-governance middleware (§2.7; pass-through until the
-        Milestone-5 pipeline) — so a prebuilt agent wires into vdreamer
-        without touching internals.
+        plus the tool-governance middleware (§2.7) carrying the agent's
+        ``tool_policies`` — so a prebuilt agent wires into vdreamer without
+        touching internals.
         """
         return {
             "checkpointer": self.checkpointer,
             "store": self.store,
             "context_schema": VDreamerContext,
-            "middleware": [VDreamerToolMiddleware()],
+            "middleware": [VDreamerToolMiddleware(self.tool_policies)],
         }
 
 

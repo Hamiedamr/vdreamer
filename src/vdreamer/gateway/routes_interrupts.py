@@ -47,6 +47,7 @@ from vdreamer.interrupts import (
     visible_to,
 )
 from vdreamer.queue import InvalidTransition
+from vdreamer.streaming import MCP_ELICITATION_KIND
 
 _log = logging.getLogger(__name__)
 
@@ -161,9 +162,47 @@ def _decision_value(decision: Decision, record: InterruptRecord) -> dict[str, An
     return value
 
 
+def _elicitation_resume(decision: Decision, record: InterruptRecord) -> dict[str, Any]:
+    """MCP elicitation (§4.5): ``{"responses": {key: {action, content?}}}``.
+
+    ``edit`` answers every request: ``payload`` maps each request ``key`` to
+    its form content (or is already ``{"responses": {...}}``). ``reject``
+    declines every request; the server decides how the call goes on.
+    """
+    requests = record.payload.get("requests") if isinstance(record.payload, dict) else None
+    keys = [
+        str(request["key"])
+        for request in requests or []
+        if isinstance(request, dict) and "key" in request
+    ]
+    if decision.action == "reject":
+        return {"responses": {key: {"action": "decline"} for key in keys}}
+    payload = decision.payload
+    if isinstance(payload, dict) and isinstance(payload.get("responses"), dict):
+        responses: dict[str, Any] = payload["responses"]
+    elif isinstance(payload, dict):
+        responses = {key: {"action": "accept", "content": value} for key, value in payload.items()}
+    else:
+        raise ApiError(422, ErrorCode.INVALID_EDIT, "an elicitation answer needs a payload object")
+    missing = sorted(set(keys) - set(responses))
+    if missing:
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_EDIT,
+            "every elicitation request needs an answer",
+            {"missing": missing},
+        )
+    return {"responses": responses}
+
+
 def _resume_value(body: ResolveRequest, record: InterruptRecord) -> dict[str, Any]:
-    """The resume value the gateway builds (§4.5): ``{action, payload?, text?}`` or
-    ``{"decisions": [...]}`` in action order."""
+    """The resume value the gateway builds (§4.5): ``{action, payload?, text?}``,
+    ``{"decisions": [...]}`` in action order, or an MCP elicitation's
+    ``{"responses": {...}}``."""
+    if record.kind == MCP_ELICITATION_KIND and body.action is not None:
+        decision = Decision(action=body.action, payload=body.payload, text=body.text)
+        _decision_value(decision, record)  # action offered, edit has a payload
+        return _elicitation_resume(decision, record)
     if body.decisions is not None:
         return {"decisions": [_decision_value(decision, record) for decision in body.decisions]}
     assert body.action is not None  # ResolveRequest enforces exactly one form

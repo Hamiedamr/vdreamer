@@ -3,17 +3,16 @@
 vdreamer adds no tool base class (A37): every tool — custom, ecosystem, or
 MCP — stays a plain LangChain ``BaseTool``. Governance is *data*, a
 :class:`Policy` stored under ``tool.metadata["vdreamer"]``, plus *wrappers*
-(:class:`VDreamerToolMiddleware` hooks ``create_agent`` tool calls; M5's
+(:class:`VDreamerToolMiddleware` hooks ``create_agent`` tool calls;
 ``ctx.tools.govern`` proxies plain tools) that keep the tool's name and
 schema because they wrap and never rewrite.
 
-Milestone 1 ships the contract: the policy dataclasses, argument redaction
-(A33), policy resolution, the ``@tool`` decorator, and a pass-through
-middleware that proves the wiring. The seven-step governance pipeline of
-§2.7 — authorize → emit ``tool.call`` → approval gate → execute under
-timeout → normalize → contain errors → emit ``tool.result`` — lands in
-Milestone 5 (the approval gate itself in Milestone 8) and consumes exactly
-the Policy/metadata types defined here.
+This module is the contract: the policy dataclasses, argument redaction
+(A33), policy resolution, the ``@tool`` decorator, and the ``create_agent``
+middleware. The seven-step governance pipeline of §2.7 — authorize → emit
+``tool.call`` → approval gate → execute under timeout → normalize → contain
+errors → emit ``tool.result`` — lives in ``vdreamer.governance`` (Milestone 5)
+and consumes exactly the Policy/metadata types defined here.
 """
 
 from __future__ import annotations
@@ -381,50 +380,72 @@ def tool(
 class VDreamerToolMiddleware(AgentMiddleware[Any, Any, Any]):
     """Tool-governance middleware for ``create_agent`` graphs (PRD §2.7, A37).
 
-    **Milestone 1: pure pass-through.** Both hooks simply run the handler —
-    nothing is authorized, redacted, timed out, normalized, or contained yet.
-    The full governance pipeline lands in Milestone 5 (approval gate:
-    Milestone 8) and will run inside these hooks on every governed call,
-    consuming the :class:`Policy` stored in ``tool.metadata["vdreamer"]``
-    (§2.7 steps):
-
-    1. **Authorize** — tool ``scope`` plus ``requires_roles`` against the
-       initiator's roles.
-    2. **Emit ``tool.call``** — args redacted per policy keys plus
-       :data:`DEFAULT_REDACT_KEYS` (A33).
-    3. **Approve** — optional ``Policy.approval`` gate via
-       ``require_approval`` (M8).
-    4. **Execute** — under ``Policy.timeout_s``, with ``ctx.idempotency_key``
-       for ``side_effects=True``.
-    5. **Normalize** — results over ``max_result_chars`` become artifacts.
-    6. **Contain** — failures become error ``ToolMessage`` unless
-       ``fail_run=True``.
-    7. **Emit ``tool.result``** — with source and ``duration_ms``.
+    ``ctx.agent_kwargs()`` adds one, built with the agent's ``tool_policies``;
+    every tool call the agent makes then runs the seven-step pipeline of
+    ``vdreamer.governance`` (authorize → ``tool.call`` → approval gate →
+    execute under timeout → normalize → contain → ``tool.result``), with the
+    tool's effective :class:`Policy` — its ``metadata["vdreamer"]`` overlaid by
+    ``policies``. A call on an already-governed tool (a
+    ``governance.GovernedTool`` from ``ctx.tools.govern`` / ``ctx.tools.mcp``)
+    passes straight through: the proxy governs it, exactly once.
 
     A37: the tool's name and schema are preserved because this middleware
-    *wraps* calls — it never rewrites the ``BaseTool``, its name, its args
-    schema, or its result.
-
-    ``awrap_tool_call`` is the hook vdreamer's async runtime exercises
-    (``ainvoke``/``astream``); ``wrap_tool_call`` keeps plain synchronous
-    ``invoke`` working. No other hooks are overridden.
+    *wraps* calls — it never rewrites the ``BaseTool``, its name, or its args
+    schema. ``awrap_tool_call`` is the hook vdreamer's async runtime exercises;
+    ``wrap_tool_call`` keeps plain synchronous ``invoke`` working.
     """
 
     tools: Sequence[BaseTool] = ()
     """No additional tools; this middleware only wraps existing ones."""
+
+    def __init__(self, policies: Mapping[str, Policy] | None = None) -> None:
+        super().__init__()
+        self.policies: Mapping[str, Policy] = policies if policies is not None else {}
+
+    def _call(self, request: ToolCallRequest) -> Any:
+        from vdreamer.governance import effective_policy, governed_call
+
+        assert request.tool is not None
+        return governed_call(
+            request.tool,
+            request.tool_call,
+            policy=effective_policy(request.tool, self.policies),
+        )
+
+    @staticmethod
+    def _with_context(request: ToolCallRequest, call_ctx: Any) -> ToolCallRequest:
+        """The request whose ``runtime.context`` is the call-scoped context."""
+        from vdreamer.context import VDreamerContext
+
+        runtime = request.runtime
+        if call_ctx is None or not isinstance(getattr(runtime, "context", None), VDreamerContext):
+            return request
+        return dataclasses.replace(request, runtime=dataclasses.replace(runtime, context=call_ctx))
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
-        """Synchronous pass-through; the §2.7 pipeline arrives in M5."""
-        return handler(request)
+        """Synchronous governance (plain ``invoke`` callers)."""
+        from vdreamer.governance import is_governed, run_governed_sync
+
+        if request.tool is None or is_governed(request.tool):
+            return handler(request)
+        return run_governed_sync(
+            self._call(request), lambda call_ctx: handler(self._with_context(request, call_ctx))
+        )
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        """Asynchronous pass-through; the §2.7 pipeline arrives in M5."""
-        return await handler(request)
+        """Asynchronous governance — the path vdreamer's runtime drives."""
+        from vdreamer.governance import is_governed, run_governed
+
+        if request.tool is None or is_governed(request.tool):
+            return await handler(request)
+        return await run_governed(
+            self._call(request), lambda call_ctx: handler(self._with_context(request, call_ctx))
+        )

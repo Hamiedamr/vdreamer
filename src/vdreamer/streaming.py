@@ -29,12 +29,15 @@ Event mapping (PRD §3.3, §4.2, §4.5/A44, D18/A20):
   ``thinking.delta`` is suppressed entirely when ``expose_thinking`` is
   false (the spec is the driver's, not the payload model's).
 - ``message.completed`` — on message completion (§3.3 payload).
-- ``tool.call`` / ``tool.result`` — **M2 ungoverned mapping**: governed
-  tools (§2.7) are the single emitter from M5 on; until then AIMessage
-  ``tool_calls`` map to ``tool.call`` with default redaction (A33) and
-  ToolMessages to ``tool.result``. The mapping lives behind
-  :func:`_tool_call_envelope` / :func:`_tool_result_envelope` so M5 can swap
-  the emitters without touching the drivers.
+- ``tool.call`` / ``tool.result`` — governed tools (§2.7,
+  ``vdreamer.governance``) are the single emitter: their records arrive as
+  custom data while the call runs, and the mapper turns them into the
+  events. A call *nobody* governs falls back to the ungoverned mapping: its
+  AIMessage ``tool_call`` is held, then emitted as ``tool.call`` with default
+  redaction (A33) right before its ToolMessage's ``tool.result`` — or at run
+  end, if the call never ran (a review interrupt). Holding the call until it
+  executes is what lets a governed record replace it: the AIMessage arrives
+  before the mapper can know whether a policy will redact more.
 - custom data — vdreamer-enveloped records (the exact shapes
   ``vdreamer.context.emit_*`` buffer/stream) become ``progress`` / ``log`` /
   ``artifact.created`` / ``citation`` events; any other custom data becomes
@@ -64,6 +67,7 @@ from typing import Any, Final, Literal, cast
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
+from vdreamer.artifacts import artifact_urls
 from vdreamer.context import DEFAULT_APPROVAL_ACTIONS
 from vdreamer.eventlog import SeqCounter
 from vdreamer.events import (
@@ -85,6 +89,10 @@ from vdreamer.events import (
     ToolResultPayload,
 )
 from vdreamer.tools import redact_args
+
+#: The §4.5 kind of an MCP elicitation interrupt (``langchain.mcp``'s own
+#: discriminator, ``ELICITATION_INTERRUPT_TYPE``, rides the value's ``type``).
+MCP_ELICITATION_KIND: Final[str] = "mcp_elicitation"
 
 #: Selects the stream driver (PRD §2.4, A43): ``v2`` (default, stable) or ``v3`` (beta).
 STREAM_DRIVER_ENV_VAR: Final[str] = "VDREAMER_STREAM_DRIVER"
@@ -339,6 +347,20 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
     action ``"respond"`` (§4.5 table); the resolver payload rides the
     ``payload`` field verbatim.
     """
+    if isinstance(value, Mapping) and value.get("type") == MCP_ELICITATION_KIND:
+        # langchain.mcp elicitation (§4.5): answered with edit (the form
+        # answers) or reject (decline); the gateway builds {"responses": ...}.
+        requests = value.get("requests")
+        return InterruptRequestedPayload(
+            interrupt_id=interrupt_id,
+            kind=MCP_ELICITATION_KIND,
+            actions=["edit", "reject"],
+            payload={
+                "tool_name": str(value.get("tool_name") or ""),
+                "requests": list(requests) if isinstance(requests, Sequence) else [],
+            },
+            expires_at=(datetime.now(UTC) + timedelta(hours=24)).isoformat(),
+        )
     if isinstance(value, Mapping) and "kind" in value:
         actions = value.get("actions")
         if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes)) or not actions:
@@ -380,7 +402,7 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
 
 
 # ---------------------------------------------------------------------------
-# Ungoverned tool-event mapping (M2; M5's governance pipeline replaces these)
+# Ungoverned tool-event mapping (calls no governance pipeline emitted)
 # ---------------------------------------------------------------------------
 
 
@@ -389,9 +411,9 @@ def _tool_call_envelope(
 ) -> EventEnvelope:
     """One AIMessage ``tool_call`` dict → ``tool.call`` with default redaction (A33).
 
-    ``source`` is ``"custom"`` (§2.4: ungoverned tool messages are mapped
-    with default redaction; ``langchain``/``mcp:{server}`` sources arrive
-    with M5's governed pipeline).
+    ``source`` is ``"custom"``: an ungoverned call carries no tool object to
+    classify (§2.4: ungoverned tool messages are mapped with default
+    redaction); governed calls report their real source.
     """
     args = tool_call.get("args")
     return envelope(
@@ -409,11 +431,11 @@ def _tool_call_envelope(
 def _tool_result_envelope(
     envelope: EnvelopeFn, ns: Sequence[str], message: ToolMessage
 ) -> EventEnvelope:
-    """One ToolMessage → ``tool.result`` (M2 ungoverned mapping).
+    """One ToolMessage → ``tool.result`` (ungoverned mapping).
 
-    ``duration_ms`` is 0 and ``artifact_ids`` empty — governed timing and
-    overflow-artifacts arrive with M5 (§2.7 steps 5/7). Full output is never
-    streamed (§3.3): the content text rides ``summary`` capped at 8,000 chars.
+    ``duration_ms`` is 0 and ``artifact_ids`` empty — timing and overflow
+    artifacts are the governance pipeline's (§2.7 steps 5/7). Full output is
+    never streamed (§3.3): the content text rides ``summary`` capped at 8,000.
     """
     status = str(getattr(message, "status", None) or "ok")
     content = message.text
@@ -461,6 +483,10 @@ class _RunMapper:
         self._completed: set[str] = set()
         self._thinking: dict[str, list[str]] = {}
         self._citations: dict[str, list[str]] = {}
+        #: Ungoverned AIMessage tool calls waiting for their ToolMessage.
+        self._held_calls: dict[str, tuple[tuple[str, ...], Mapping[str, Any]]] = {}
+        #: Call ids a governance pipeline emitted for (never mapped again).
+        self._governed: set[str] = set()
 
     def envelope(
         self, type_: EventType, payload: Mapping[str, Any], ns: Sequence[str] = ()
@@ -505,6 +531,9 @@ class _RunMapper:
                     type_, TokenDeltaPayload(message_id=message_id, text=text).event_payload()
                 )
             )
+        # Calls that never ran this attempt (e.g. held for a review interrupt).
+        for call_id in list(self._held_calls):
+            out.extend(self._release_call(call_id))
         seen_interrupt_ids: set[str] = set()
         for interrupt in interrupts:
             interrupt_id = str(getattr(interrupt, "id", None) or f"int_{uuid.uuid4().hex}")
@@ -590,6 +619,8 @@ class _RunMapper:
         their protocol events; anything else becomes a ``log`` fallback with
         a repr capped at 500 chars.
         """
+        if isinstance(data, Mapping) and data.get("type") in ("tool.call", "tool.result"):
+            return self._governed_tool_event(ns, data)
         vdreamer_types = ("progress", "log", "artifact", "citation")
         if isinstance(data, Mapping) and data.get("type") in vdreamer_types:
             ctype = str(data["type"])
@@ -617,31 +648,7 @@ class _RunMapper:
                     )
                 ]
             if ctype == "artifact":
-                return [
-                    self.envelope(
-                        EventType.ARTIFACT_CREATED,
-                        ArtifactCreatedPayload(
-                            artifact_id=str(data.get("artifact_id") or f"art_{uuid.uuid4().hex}"),
-                            question_id=self._spec.run_id,
-                            session_id=self._spec.thread_id,
-                            kind=str(data.get("kind") or ""),
-                            renderer=(
-                                str(data["renderer"])
-                                if isinstance(data.get("renderer"), str)
-                                else None
-                            ),
-                            name=str(data.get("name") or ""),
-                            # preview/view_url/download_url and byte counts are
-                            # the M6 artifact pipeline's (§3.4 write order).
-                            metadata=(
-                                dict(data["metadata"])
-                                if isinstance(data.get("metadata"), Mapping)
-                                else {}
-                            ),
-                        ).event_payload(),
-                        ns,
-                    )
-                ]
+                return [self._artifact_event(ns, data)]
             # citation
             message_id = str(data.get("message_id") or "")
             citation_id = str(data.get("citation_id") or f"cit_{uuid.uuid4().hex}")
@@ -686,6 +693,92 @@ class _RunMapper:
             )
         ]
 
+    def _artifact_event(self, ns: Sequence[str], data: Mapping[str, Any]) -> EventEnvelope:
+        """An ``artifact`` record → ``artifact.created`` (§3.4).
+
+        A record the artifact writer stored (``stored``: bytes and metadata
+        row already written, D7) carries its mime type, size, preview, and the
+        gateway URLs; a buffered ``emit_artifact`` record (bytes land with M6)
+        carries identity and metadata only.
+        """
+        artifact_id = str(data.get("artifact_id") or f"art_{uuid.uuid4().hex}")
+        size = data.get("size_bytes")
+        preview = data.get("preview")
+        mime = data.get("mime_type")
+        view_url = download_url = None
+        if data.get("stored"):
+            view_url, download_url = artifact_urls(artifact_id)
+        return self.envelope(
+            EventType.ARTIFACT_CREATED,
+            ArtifactCreatedPayload(
+                artifact_id=artifact_id,
+                question_id=self._spec.run_id,
+                session_id=self._spec.thread_id,
+                kind=str(data.get("kind") or ""),
+                renderer=str(data["renderer"]) if isinstance(data.get("renderer"), str) else None,
+                name=str(data.get("name") or ""),
+                mime_type=mime if isinstance(mime, str) else None,
+                size_bytes=size if isinstance(size, int) else None,
+                preview=dict(preview) if isinstance(preview, Mapping) else None,
+                view_url=view_url,
+                download_url=download_url,
+                metadata=(
+                    dict(data["metadata"]) if isinstance(data.get("metadata"), Mapping) else {}
+                ),
+            ).event_payload(),
+            ns,
+        )
+
+    # -- tool events ---------------------------------------------------------
+
+    def _governed_tool_event(
+        self, ns: Sequence[str], data: Mapping[str, Any]
+    ) -> list[EventEnvelope]:
+        """A governance record → its ``tool.call`` / ``tool.result`` (§2.7 steps 2/7)."""
+        call_id = str(data.get("tool_call_id") or "")
+        self._governed.add(call_id)
+        self._held_calls.pop(call_id, None)  # the governed call replaces the fallback
+        if data.get("type") == "tool.call":
+            args = data.get("args")
+            call_payload = ToolCallPayload(
+                tool_call_id=call_id,
+                name=str(data.get("name") or ""),
+                source=str(data.get("source") or "custom"),
+                args=dict(args) if isinstance(args, Mapping) else {},
+            ).event_payload()
+            return [self.envelope(EventType.TOOL_CALL, call_payload, ns)]
+        error = data.get("error")
+        duration = data.get("duration_ms")
+        artifact_ids = data.get("artifact_ids")
+        result_payload = ToolResultPayload(
+            tool_call_id=call_id,
+            status="error" if data.get("status") == "error" else "ok",
+            error=(
+                ErrorInfo(
+                    code=str(error.get("code") or "tool_error"),
+                    message=str(error.get("message") or ""),
+                )
+                if isinstance(error, Mapping)
+                else None
+            ),
+            summary=str(data.get("summary") or "")[:_TOOL_SUMMARY_MAX_CHARS],
+            artifact_ids=(
+                [str(item) for item in artifact_ids]
+                if isinstance(artifact_ids, Sequence) and not isinstance(artifact_ids, str)
+                else []
+            ),
+            duration_ms=duration if isinstance(duration, int) else 0,
+        ).event_payload()
+        return [self.envelope(EventType.TOOL_RESULT, result_payload, ns)]
+
+    def _release_call(self, call_id: str) -> list[EventEnvelope]:
+        """Emit a held ungoverned ``tool.call`` (default redaction)."""
+        held = self._held_calls.pop(call_id, None)
+        if held is None:
+            return []
+        ns, tool_call = held
+        return [_tool_call_envelope(self.envelope, ns, tool_call)]
+
     # -- completed messages --------------------------------------------------
 
     def message(self, ns: Sequence[str], message: BaseMessage) -> list[EventEnvelope]:
@@ -705,12 +798,20 @@ class _RunMapper:
         self._completed.add(message_id)
         out: list[EventEnvelope] = []
         if isinstance(message, ToolMessage):
+            call_id = str(message.tool_call_id)
+            if call_id in self._governed:
+                return out  # the pipeline already emitted its tool.result
+            out.extend(self._release_call(call_id))
             out.append(_tool_result_envelope(self.envelope, ns, message))
             return out
         if not isinstance(message, AIMessage):
             return out
         for tool_call in message.tool_calls or []:
-            out.append(_tool_call_envelope(self.envelope, ns, tool_call))
+            call_id = str(tool_call.get("id") or "")
+            if not call_id:
+                out.append(_tool_call_envelope(self.envelope, ns, tool_call))
+            elif call_id not in self._governed:
+                self._held_calls[call_id] = (tuple(ns), tool_call)
         usage = getattr(message, "usage_metadata", None)
         usage_payload = usage.model_dump() if usage is not None else None
         thinking = "".join(self._thinking.get(message_id, [])) or None

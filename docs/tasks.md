@@ -179,32 +179,33 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 
 **Goal:** the governed tool pipeline and the MCP lifecycle (A37–A40).
 
-**Governed tool pipeline**
-- [ ] `ctx.tools.govern(tools)` proxy, plus `VDreamerToolMiddleware` (`@wrap_tool_call`) for `create_agent`. Tool name and schema are preserved (A37).
-- [ ] Governance steps, in order:
-  1. Authorize (scope/roles).
-  2. Emit `tool.call`, redacting policy keys plus the defaults password/token/secret/api_key/authorization (A33).
-  3. Optional approval gate.
-  4. Execute under `timeout_s` (default 60), with `ctx.idempotency_key`.
-  5. Normalize: a result over `max_result_chars` (8,000) becomes a `json`/`file` artifact; the model gets a truncated body plus the `artifact_id`.
-  6. Contain errors (`tool_error|timeout|denied|transport|invalid_args`). The run continues unless `fail_run=true`.
-  7. Emit `tool.result` with `source` and `duration_ms`.
-- [ ] `ToolRuntime[VDreamerContext]` parameter access: run, thread, user, roles, idempotency_key, state, stream_writer, tool_call_id.
+**Governed tool pipeline** (`vdreamer.governance`)
+- [x] `ctx.tools.govern(tools)` proxy, plus `VDreamerToolMiddleware` (`@wrap_tool_call`) for `create_agent`. Tool name and schema are preserved (A37). (`GovernedTool` delegates name, description, schema, and `ToolNode` injection facts to the wrapped tool; the middleware carries the agent's `tool_policies` via `ctx.agent_kwargs()`; an already-governed tool is never governed twice. `BuildContext.tools` is the `ToolKit`.)
+- [x] Governance steps, in order (one `_Pipeline`, async + sync paths):
+  1. Authorize (scope/roles). (`requires_roles`: any one; `scope`: granted by a role equal to it or an `fnmatch` pattern over it, e.g. `db:*`.)
+  2. Emit `tool.call`, redacting policy keys plus the defaults password/token/secret/api_key/authorization (A33). (Injected args — `runtime`, state, store — never reach the event.)
+  3. Optional approval gate. (`Policy.approval` → `require_approval` with `approve`/`reject`; a rejection is contained as `denied`. A resumed attempt re-emits its `tool.call` with the same `tool_call_id`. Four-eyes/expiry stay M8.)
+  4. Execute under `timeout_s` (default 60), with `ctx.idempotency_key`. (`side_effects=True` → `{run key}:{tool_call_id}`, in both `current_context()` and `runtime.context`; stable across recovery because the call id is checkpointed.)
+  5. Normalize: a result over `max_result_chars` (8,000) becomes a `json`/`file` artifact; the model gets a truncated body plus the `artifact_id`. (MCP structured content and base64 media blocks map the same way. Artifacts go through the new write side — `artifacts.write_artifact`, D7 order — into the store the worker binds per run.)
+  6. Contain errors (`tool_error|timeout|denied|transport|invalid_args`). The run continues unless `fail_run=true`. (`invalid_args` messages never echo values; `fail_run` raises `GovernedToolError`.)
+  7. Emit `tool.result` with `source` and `duration_ms`. (`source` rides the matching `tool.call`: `custom|langchain|mcp:{server}`.)
+- [x] `ToolRuntime[VDreamerContext]` parameter access: run, thread, user, roles, idempotency_key, state, stream_writer, tool_call_id.
+- [x] Governed tools are the single emitter of `tool.call`/`tool.result` (§2.4): the stream mapper turns their records into events and drops its own mapping for those call ids. An ungoverned call still maps with default redaction, but its `tool.call` is now held until the call runs (just before `tool.result`, or at run end) — the golden `tool_roundtrip` order changed accordingly.
 
-**MCP.** Isolated in one module; `langchain.mcp` is version-pinned (A38/A39).
-- [ ] `resources.yaml` entries: `type: mcp`, `url` → Streamable HTTP or `command` → stdio, `bearer_env`, `startup: required|optional`, `refresh_s`, `include` globs, `identity`.
-- [ ] One `MCPAdapter` per server at worker boot. `list_tools()` is cached and refreshed every `refresh_s`. Tools are named `{server}_{tool}` and selected with `ctx.tools.mcp(server, include=[...])`.
-- [ ] Each run records its tool-snapshot hash.
-- [ ] Failures: a down `required` server fails `/readyz`; an `optional` one is excluded and logged.
-- [ ] Elicitation arrives as a LangGraph interrupt and is normalized (§4.5).
-- [ ] Network rules (A40):
-  - `NETWORK_ALLOWLIST` is enforced at config load **and** at connect.
+**MCP.** Isolated in one module (`vdreamer.mcp`); `langchain.mcp` is version-pinned (A38/A39).
+- [x] `resources.yaml` entries: `type: mcp`, `url` → Streamable HTTP or `command` → stdio, `bearer_env`, `startup: required|optional`, `refresh_s`, `include` globs, `identity`. (`vdreamer.resources` loads the file — `--resources` or `$VDREAMER_RESOURCES` on `dev`/`worker`/`validate` — and refuses inline secrets (A23); `identity: forward` is refused as P1; other resource types are M7's.)
+- [x] One `MCPAdapter` per server at worker boot. `list_tools()` is cached and refreshed every `refresh_s`. Tools are named `{server}_{tool}` and selected with `ctx.tools.mcp(server, include=[...])`.
+- [x] Each run records its tool-snapshot hash. (`vdreamer_tool_snapshot` in `configurable`, so it lands in the run's checkpoint metadata; the runner rebuilds the graph when the snapshot changes — "changes apply to new runs".)
+- [x] Failures: a down `required` server fails `/readyz`; an `optional` one is excluded and logged. (Both retry on `refresh_s`; `vdreamer_mcp_server_up` per server. `/readyz` sees MCP under `vdreamer dev`; a split `worker` process has no readiness endpoint yet.)
+- [x] Elicitation arrives as a LangGraph interrupt and is normalized (§4.5). (`langchain.mcp`'s interrupt → kind `mcp_elicitation`, actions `edit`/`reject`; the gateway builds `{"responses": {key: {action, content?}}}` — `edit` answers every request, `reject` declines them. Verified through the REST surface with the interrupt value `langchain.mcp` raises; a live elicitation round against a real server still needs a modern-protocol server fixture.)
+- [x] Network rules (A40):
+  - `NETWORK_ALLOWLIST` is enforced at config load **and** at connect. (Host globs and IPs/CIDRs; at connect a name off the host list must resolve only into allowed networks.)
   - stdio `command` must be an absolute path to a preinstalled binary.
-  - Launchers that fetch packages at runtime (`npx`, `uvx`, `pip`) are rejected.
-  - stdio servers run under rlimits with only their declared env.
-- [ ] `validate` checks: no ungoverned tools; approval routes wired.
+  - Launchers that fetch packages at runtime (`npx`, `uvx`, `pip`) are rejected. (Also `uv`, `pipx`, `npm`, `pnpm`, `yarn`, `bun(x)`, and `python -m pip|uv|pipx`.)
+  - stdio servers run under rlimits with only their declared env. (POSIX: `_mcp_launch.py` sets the rlimits and `execve`s with only the declared keys, since the MCP SDK merges a default env into every child. Windows dev hosts get neither — exercised on Linux CI, D19.)
+- [x] `validate` checks: no ungoverned tools; approval routes wired. (`tools.governed`: every `ToolNode`, subgraphs included, holds only proxies or runs under the middleware; `approval.routes`: a headless agent's tool approval needs an `approver_role`, A16. `ApprovalGate` route wiring is M8.)
 
-**Exit:** a governed tool run shows a redacted `tool.call` → `tool.result` with an overflow artifact. MCP stdio and HTTP servers are both discoverable, and a failed optional server is excluded.
+**Exit:** ✅ verified — a governed tool run shows a redacted `tool.call` → `tool.result` with an overflow artifact (`tests/tools/test_governance.py`, both stream drivers; `tests/api/test_tool_governance_api.py` serves the artifact bytes through the gateway on both store backends). MCP stdio and HTTP (bearer) servers are both discoverable against a real FastMCP fixture server, and a failed optional server is excluded while a failed required one fails readiness (`tests/tools/test_mcp.py`). Verified in a real `vdreamer dev --resources` process: `/readyz` probes the required server, the optional one is excluded, and the overflow artifacts are served from `artifacts/{thread}/{run}/` next to the `.db`. Full suite: 522 passed, 11 skipped; ruff + mypy (strict) clean; `doctor --offline` green (it now imports the MCP stack under the egress guard and forces `FASTMCP_CHECK_FOR_UPDATES=off`). The smoke set (now incl. the exit and MCP runs) passes on the floor pins (langchain 1.4.0, langgraph 1.2.11).
 
 ---
 

@@ -27,6 +27,12 @@ builds the agent once, like the worker.
 Both resolve the agent through :func:`vdreamer.discovery.resolve_agent` (a
 ``pkg.module:agent`` spec, or a bare name via ``--registry``/``--agents-dir``,
 D2) and take connection strings from the environment only (A23).
+
+``worker`` and ``dev`` (Milestone 5) read ``resources.yaml`` (``--resources``
+or ``$VDREAMER_RESOURCES``) and start its ``type: mcp`` servers at boot
+(``vdreamer.mcp``, §2.7): their tools reach the agent through
+``ctx.tools.mcp(...)``, and under ``dev`` every ``required`` server is a
+``/readyz`` probe.
 """
 
 from __future__ import annotations
@@ -64,6 +70,7 @@ from vdreamer.eventlog import (
     PostgresEventStore,
 )
 from vdreamer.interrupts import PostgresInterruptStore
+from vdreamer.mcp import MCPRegistry, MCPServerConfig, NetworkAllowlist
 from vdreamer.persistence import (
     PG_DSN_ENV_VAR,
     MissingPostgresDependencyError,
@@ -72,6 +79,7 @@ from vdreamer.persistence import (
     open_checkpointer,
 )
 from vdreamer.queue import InMemoryRunQueue, PostgresRunQueue, RunState
+from vdreamer.resources import ResourcesError, load_resources, resolve_resources_path
 from vdreamer.runtime import AgentRunner
 from vdreamer.sqlite_state import SqliteState, open_sqlite_state
 from vdreamer.threads import PostgresThreadStore
@@ -117,6 +125,46 @@ def _install_sigint_stop(stop: asyncio.Event) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# resources.yaml -> MCP servers (§2.7)
+# ---------------------------------------------------------------------------
+
+
+def _load_mcp_configs(command: str, resources: str | None) -> list[MCPServerConfig] | None:
+    """The ``type: mcp`` servers of ``resources.yaml``; ``None`` (printed) on a bad file."""
+    path = resolve_resources_path(resources)
+    if path is None:
+        return []
+    from vdreamer.mcp import mcp_servers_from_resources
+
+    try:
+        return mcp_servers_from_resources(
+            load_resources(path), allowlist=NetworkAllowlist.from_env()
+        )
+    except ResourcesError as exc:  # MCPConfigError subclasses it
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+
+
+@asynccontextmanager
+async def _open_mcp(
+    command: str, configs: Sequence[MCPServerConfig]
+) -> AsyncIterator[MCPRegistry | None]:
+    """Start the MCP servers for the process lifetime (none configured -> ``None``)."""
+    if not configs:
+        yield None
+        return
+    from vdreamer.mcp import open_mcp_registry
+
+    async with open_mcp_registry(configs, allowlist=NetworkAllowlist.from_env()) as registry:
+        for server in registry.servers.values():
+            state = "up" if server.up else f"DOWN ({server.last_error})"
+            role = "required" if server.config.required else "optional"
+            tools = len(server.tools())
+            print(f"vdreamer {command}: MCP {server.name} [{role}] {state}, {tools} tool(s)")
+        yield registry
+
+
+# ---------------------------------------------------------------------------
 # vdreamer worker
 # ---------------------------------------------------------------------------
 
@@ -139,6 +187,7 @@ async def _worker_main(
     claimant: str,
     metrics_host: str,
     metrics_port: int | None,
+    mcp_configs: Sequence[MCPServerConfig] = (),
 ) -> int:
     """The worker process body: everything inside the checkpointer's lifetime."""
     queue = PostgresRunQueue(dsn)
@@ -151,8 +200,8 @@ async def _worker_main(
     stop = asyncio.Event()
     posix_sigint = _install_sigint_stop(stop)
     try:
-        async with open_checkpointer(dsn) as saver:
-            runner = AgentRunner(agent, checkpointer=saver)
+        async with open_checkpointer(dsn) as saver, _open_mcp("worker", mcp_configs) as mcp:
+            runner = AgentRunner(agent, checkpointer=saver, mcp=mcp)
 
             async def sink_factory(run_id: str) -> EventSink:
                 return await PostgresEventLog.connect(dsn)
@@ -187,10 +236,14 @@ def run_worker(
     claimant: str | None = None,
     metrics_host: str = "127.0.0.1",
     metrics_port: int | None = None,
+    resources: str | None = None,
 ) -> int:
     """CLI entry point for ``vdreamer worker`` (PRD §2.1)."""
     resolved = _resolve_cli_agent("worker", agent, registry, agents_dir)
     if resolved is None:
+        return 1
+    mcp_configs = _load_mcp_configs("worker", resources)
+    if mcp_configs is None:
         return 1
     try:
         dsn = dsn_from_env(PG_DSN_ENV_VAR)
@@ -200,7 +253,12 @@ def run_worker(
     try:
         return asyncio.run(
             _worker_main(
-                resolved, dsn, claimant or _default_claimant(), metrics_host, metrics_port
+                resolved,
+                dsn,
+                claimant or _default_claimant(),
+                metrics_host,
+                metrics_port,
+                mcp_configs,
             )
         )
     except MissingPostgresDependencyError as exc:
@@ -240,19 +298,21 @@ async def _dev_gateway(
     host: str,
     port: int,
     tokens: tuple[str, ...],
+    mcp: MCPRegistry | None = None,
 ) -> int:
     """``vdreamer dev`` without ``--input``: gateway + worker loop in one process (D11).
 
-    Runs, events, threads, and interrupts live in ``state`` — the same SQLite
-    file as the checkpoints — so a restart resumes where the last process
-    stopped (the testing phase runs on SQLite, not Postgres).
+    Runs, events, threads, interrupts, and artifact metadata live in ``state``
+    — the same SQLite file as the checkpoints (artifact bytes beside it) — so
+    a restart resumes where the last process stopped (the testing phase runs
+    on SQLite, not Postgres). Required MCP servers are ``/readyz`` probes.
     """
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
 
     queue = state.queue
     log = state.events
     interrupts = state.interrupts
-    runner = AgentRunner(agent, checkpointer=checkpointer)
+    runner = AgentRunner(agent, checkpointer=checkpointer, mcp=mcp)
 
     async def sink_factory(run_id: str) -> EventSink:
         return log  # one shared log: the gateway reads what the worker writes
@@ -266,6 +326,7 @@ async def _dev_gateway(
         sink_factory=sink_factory,
         poll_interval_s=0.05,
         interrupt_store=interrupts,
+        artifact_store=state.artifacts,
     )
     backend = GatewayBackend(
         agents={agent.name: agent},
@@ -275,8 +336,9 @@ async def _dev_gateway(
         event_writer=log,
         hub=log.hub,
         interrupts=interrupts,
-        artifacts=InMemoryArtifactStore(),
+        artifacts=state.artifacts,
         checkpointer=checkpointer,
+        probes=mcp.probes() if mcp is not None else {},
     )
 
     @asynccontextmanager
@@ -305,6 +367,7 @@ async def _dev_main(
     host: str = "127.0.0.1",
     port: int = 8000,
     tokens: tuple[str, ...] = (),
+    mcp_configs: Sequence[MCPServerConfig] = (),
 ) -> int:
     """The dev process body: the gateway + worker until Ctrl-C, or one smoke run."""
     sinks: dict[str, InMemoryEventSink] = {}
@@ -314,13 +377,16 @@ async def _dev_main(
         sinks[run_id] = sink
         return sink
 
-    async with _open_dev_checkpointer(db) as checkpointer:
+    async with _open_dev_checkpointer(db) as checkpointer, _open_mcp("dev", mcp_configs) as mcp:
         if input_json is None:
             print(f"vdreamer dev: agent {agent.name!r} (mode {agent.mode.value})")
-            print(f"vdreamer dev: runs/events/threads/interrupts/checkpoints=sqlite:{db}")
+            print(
+                "vdreamer dev: runs/events/threads/interrupts/artifacts/checkpoints="
+                f"sqlite:{db}"
+            )
             async with open_sqlite_state(db) as state:
-                return await _dev_gateway(agent, checkpointer, state, host, port, tokens)
-        runner = AgentRunner(agent, checkpointer=checkpointer)
+                return await _dev_gateway(agent, checkpointer, state, host, port, tokens, mcp)
+        runner = AgentRunner(agent, checkpointer=checkpointer, mcp=mcp)
         queue = InMemoryRunQueue()
         worker = Worker(
             runner,
@@ -330,6 +396,7 @@ async def _dev_main(
             checkpointer=checkpointer,
             sink_factory=sink_factory,
             poll_interval_s=0.05,
+            artifact_store=InMemoryArtifactStore(),
         )
         print(f"vdreamer dev: agent {agent.name!r} (mode {agent.mode.value})")
         print(f"vdreamer dev: queue=in-memory, events=in-memory, checkpoints=sqlite:{db}")
@@ -365,10 +432,14 @@ def run_dev(
     thread_id: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
+    resources: str | None = None,
 ) -> int:
     """CLI entry point for ``vdreamer dev`` (D11): one process, no infrastructure."""
     resolved = _resolve_cli_agent("dev", agent, registry, agents_dir)
     if resolved is None:
+        return 1
+    mcp_configs = _load_mcp_configs("dev", resources)
+    if mcp_configs is None:
         return 1
     tokens: tuple[str, ...] = ()
     if input_json is None:
@@ -390,7 +461,9 @@ def run_dev(
             tokens = (secrets.token_urlsafe(24),)
             print(f"vdreamer dev: {TOKEN_ENV_VAR} unset — using a one-off token: {tokens[0]}")
     try:
-        return asyncio.run(_dev_main(resolved, db, input_json, thread_id, host, port, tokens))
+        return asyncio.run(
+            _dev_main(resolved, db, input_json, thread_id, host, port, tokens, mcp_configs)
+        )
     except MissingPostgresDependencyError as exc:  # pragma: no cover - dev never touches psycopg
         print(f"dev: {exc}", file=sys.stderr)
         return 1

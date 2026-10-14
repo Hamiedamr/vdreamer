@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="flat directory of agent modules to resolve bare names against (D2)",
     )
+    validate_parser.add_argument(
+        "--resources",
+        metavar="PATH",
+        default=None,
+        help="resources.yaml declaring the MCP servers build() selects (not contacted)",
+    )
 
     doctor_parser = subparsers.add_parser(
         "doctor", help="probe the deployment environment", description="Probe the environment."
@@ -98,6 +104,14 @@ def build_parser() -> argparse.ArgumentParser:
             help="flat directory of agent modules to resolve bare names against (D2)",
         )
 
+    def _add_resources_flag(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--resources",
+            metavar="PATH",
+            default=None,
+            help="resources.yaml: MCP servers and agent resources (default $VDREAMER_RESOURCES)",
+        )
+
     worker_parser = subparsers.add_parser(
         "worker",
         help="run the worker loop for one agent (PRD §2.1)",
@@ -128,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="127.0.0.1",
         help="interface for --metrics-port (default 127.0.0.1; wildcards refused)",
     )
+    _add_resources_flag(worker_parser)
 
     def _add_bind_flags(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -204,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="thread id for the --input run (default: none)",
     )
+    _add_resources_flag(dev_parser)
     _add_bind_flags(dev_parser)
     return parser
 
@@ -216,7 +232,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "validate":
         from vdreamer.validate import run_validate
 
-        return run_validate(args.agent, registry=args.registry, agents_dir=args.agents_dir)
+        return run_validate(
+            args.agent,
+            registry=args.registry,
+            agents_dir=args.agents_dir,
+            resources=args.resources,
+        )
 
     if args.command == "doctor":
         if not args.offline:
@@ -240,6 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             claimant=args.claimant,
             metrics_host=args.metrics_host,
             metrics_port=args.metrics_port,
+            resources=args.resources,
         )
 
     if args.command == "serve":
@@ -265,6 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             thread_id=args.thread,
             host=args.host,
             port=args.port,
+            resources=args.resources,
         )
 
     parser.error(f"unknown command {args.command!r}")

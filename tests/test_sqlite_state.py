@@ -108,3 +108,45 @@ async def test_a_run_left_running_is_recovered_on_the_next_boot(tmp_path: Path) 
     async with open_sqlite_state(db) as state:
         current = await state.queue.get(run.id)
         assert current is not None and current.status is RunState.RUNNING
+
+
+async def test_artifacts_survive_a_restart_with_their_bytes_on_disk(tmp_path: Path) -> None:
+    """Rows in the ``.db``, bytes at ``artifacts/{thread}/{run}/{id}.{ext}`` (D7, D11)."""
+    from vdreamer.artifacts import ArtifactRecord
+
+    db = tmp_path / "dev.db"
+    record = ArtifactRecord(
+        artifact_id="art_1",
+        run_id="run_1",
+        thread_id="t1",
+        kind="json",
+        name="result",
+        mime_type="application/json",
+        size_bytes=2,
+        preview={"body": {}},
+    )
+    async with open_sqlite_state(db) as state:
+        await state.artifacts.put(record, b"{}")
+        assert state.artifacts.object_path(record) == tmp_path / "artifacts/t1/run_1/art_1.json"
+
+    async with open_sqlite_state(db) as state:
+        reloaded = await state.artifacts.get("art_1")
+        assert reloaded == record
+        assert await state.artifacts.read_bytes(record) == b"{}"
+        await state.artifacts.put(record, None)  # the lifecycle deleted the object (A9)
+        assert await state.artifacts.read_bytes(record) is None
+        assert await state.artifacts.get("missing") is None
+
+
+def test_artifact_paths_refuse_unsafe_segments(tmp_path: Path) -> None:
+    import pytest
+
+    from vdreamer.artifacts import ArtifactRecord
+    from vdreamer.sqlite_state import SqliteArtifactStore
+
+    store = SqliteArtifactStore(None, tmp_path)  # type: ignore[arg-type]
+    bad = ArtifactRecord(
+        artifact_id="art_1", run_id="..", thread_id="t1", kind="file", name="x", mime_type="x/y"
+    )
+    with pytest.raises(ValueError, match="unsafe"):
+        store.object_path(bad)

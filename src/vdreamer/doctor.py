@@ -15,6 +15,7 @@ reference no external origin (``vdreamer.vendored``).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import socket
 import sys
@@ -29,6 +30,7 @@ OFFLINE_ENV: dict[str, str] = {
     "LANGSMITH_TRACING": "false",
     "HF_HUB_OFFLINE": "1",
     "TRANSFORMERS_OFFLINE": "1",
+    "FASTMCP_CHECK_FOR_UPDATES": "off",
 }
 
 #: Reported in the version block (PRD §2.3: LangChain/LangGraph versions).
@@ -39,6 +41,7 @@ VERSION_PACKAGES: tuple[str, ...] = (
     "langgraph-checkpoint-postgres",
     "fastapi",
     "uvicorn",
+    "fastmcp",
 )
 
 
@@ -121,6 +124,12 @@ def run_offline() -> int:
         import uvicorn  # noqa: F401
 
         import vdreamer.gateway  # noqa: F401 — FastAPI app factory + routes
+        import vdreamer.governance  # noqa: F401 — the governed tool pipeline (M5)
+        import vdreamer.mcp  # noqa: F401
+        if importlib.util.find_spec("fastmcp") is not None:
+            from vdreamer.mcp import _import_adapter
+
+            _import_adapter()  # langchain.mcp + FastMCP (the mcp extra), M5
     except Exception as exc:
         problems.append(f"stack import failed: {type(exc).__name__}: {exc}")
     finally:

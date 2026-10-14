@@ -128,6 +128,11 @@ def current_context() -> VDreamerContext:
     return ctx
 
 
+def current_context_or_none() -> VDreamerContext | None:
+    """The active ``VDreamerContext``, or ``None`` outside a vdreamer run."""
+    return _RUN.get()
+
+
 def _mirror_to_stream(record: dict[str, Any]) -> None:
     """Best-effort mirror of a buffered record into the LangGraph stream (WP2).
 
@@ -155,18 +160,27 @@ def _mirror_to_stream(record: dict[str, Any]) -> None:
         pass
 
 
+def emit_record(record: dict[str, Any]) -> None:
+    """Buffer one protocol record for the current run and mirror it live.
+
+    The shared tail of every ``emit_*`` helper — also how the governed tool
+    pipeline (``vdreamer.governance``) and the artifact writer publish their
+    ``tool.call``/``tool.result``/``artifact`` records.
+    """
+    current_context().pending.append(record)
+    _mirror_to_stream(record)
+
+
 def emit_progress(label: str, pct: float | None = None) -> None:
     """Emit a ``progress`` record (PRD §3.3): ``{label, pct?}``."""
     record = {"type": "progress", "label": label, "pct": pct}
-    current_context().pending.append(record)
-    _mirror_to_stream(record)
+    emit_record(record)
 
 
 def emit_log(message: str, level: str = "info") -> None:
     """Emit a ``log`` record (PRD §3.3): ``{level, message}``."""
     record = {"type": "log", "level": level, "message": message}
-    current_context().pending.append(record)
-    _mirror_to_stream(record)
+    emit_record(record)
 
 
 def emit_artifact(
@@ -208,8 +222,7 @@ def emit_artifact(
         "metadata": metadata,
         "renderer": renderer,
     }
-    current_context().pending.append(record)
-    _mirror_to_stream(record)
+    emit_record(record)
     return ArtifactRef(artifact_id=artifact_id, name=name, kind=kind)
 
 
@@ -235,8 +248,7 @@ def emit_citation(
         "snippet": snippet[:MAX_SNIPPET_CHARS],
         "score": score,
     }
-    current_context().pending.append(record)
-    _mirror_to_stream(record)
+    emit_record(record)
     return citation_id
 
 

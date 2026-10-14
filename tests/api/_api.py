@@ -26,17 +26,22 @@ import aiosqlite
 import pydantic
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode
+from langgraph.types import interrupt
 
+import vdreamer
 from vdreamer import BaseAgent, BuildContext, Mode, emit_progress, require_approval
-from vdreamer.artifacts import InMemoryArtifactStore
+from vdreamer.artifacts import ArtifactStore, InMemoryArtifactStore
 from vdreamer.eventlog import InMemoryEventLog
 from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
 from vdreamer.interrupts import InMemoryInterruptStore
 from vdreamer.queue import InMemoryRunQueue
 from vdreamer.runtime import AgentRunner
 from vdreamer.sqlite_state import (
+    SqliteArtifactStore,
     SqliteEventLog,
     SqliteInterruptStore,
     SqliteRunQueue,
@@ -150,8 +155,90 @@ class GateAgent(BaseAgent):
         return graph
 
 
+#: What the ``tooling`` agent's governed tool returns: far over 8,000 chars (§2.7).
+BIG_RESULT = json.dumps({"rows": [{"i": i, "label": "row-" + "y" * 30} for i in range(400)]})
+
+
+class ToolingAgent(BaseAgent):
+    """Chat: one governed tool call whose result overflows into an artifact (M5)."""
+
+    name = "tooling"
+    mode = Mode.CHAT
+
+    def build(self, ctx: BuildContext) -> Any:
+        @vdreamer.tool(redact=["query"])
+        def report(query: str, token: str) -> str:
+            """Build a large report."""
+            return BIG_RESULT
+
+        def plan(state: MessagesState) -> dict[str, Any]:
+            if any(getattr(m, "type", "") == "tool" for m in state["messages"]):
+                return {"messages": [AIMessage("done", id="ai_done")]}
+            call = {"name": "report", "args": {"query": "q1", "token": "t0k"}, "id": "call_r"}
+            return {"messages": [AIMessage("", id="ai_call", tool_calls=[call])]}
+
+        def route(state: MessagesState) -> str:
+            last = state["messages"][-1]
+            return "tools" if isinstance(last, AIMessage) and last.tool_calls else END
+
+        graph = StateGraph(MessagesState)
+        graph.add_node("plan", plan)
+        graph.add_node("tools", ToolNode(ctx.tools.govern([report])))
+        graph.add_edge(START, "plan")
+        graph.add_conditional_edges("plan", route)
+        graph.add_edge("tools", "plan")
+        return graph
+
+
+class ElicitState(TypedDict, total=False):
+    text: str
+    answer: Any
+
+
+class ElicitAgent(BaseAgent):
+    """Chat: raises the interrupt ``langchain.mcp`` raises for an MCP elicitation."""
+
+    name = "elicit"
+    mode = Mode.CHAT
+
+    def build(self, ctx: BuildContext) -> Any:
+        def ask(state: ElicitState) -> dict[str, Any]:
+            answer = interrupt(
+                {
+                    "type": "mcp_elicitation",
+                    "tool_name": "fx_book",
+                    "requests": [
+                        {
+                            "key": "k1",
+                            "message": "Which date?",
+                            "mode": "form",
+                            "requested_schema": {
+                                "type": "object",
+                                "properties": {"date": {"type": "string"}},
+                            },
+                        }
+                    ],
+                }
+            )
+            return {"answer": answer}
+
+        graph = StateGraph(ElicitState)
+        graph.add_node("ask", ask)
+        graph.add_edge(START, "ask")
+        graph.add_edge("ask", END)
+        return graph
+
+
 def all_agents() -> dict[str, BaseAgent]:
-    agents: list[BaseAgent] = [EchoAgent(), FormAgent(), BatchAgent(), SecretAgent(), GateAgent()]
+    agents: list[BaseAgent] = [
+        EchoAgent(),
+        FormAgent(),
+        BatchAgent(),
+        SecretAgent(),
+        GateAgent(),
+        ToolingAgent(),
+        ElicitAgent(),
+    ]
     return {agent.name: agent for agent in agents}
 
 
@@ -166,7 +253,7 @@ class Stack:
     log: InMemoryEventLog | SqliteEventLog
     threads: InMemoryThreadStore
     interrupts: InMemoryInterruptStore
-    artifacts: InMemoryArtifactStore
+    artifacts: ArtifactStore
     checkpointer: InMemorySaver
     db: aiosqlite.Connection | None = None
 
@@ -188,19 +275,21 @@ def make_stack(
     log: InMemoryEventLog | SqliteEventLog
     threads: InMemoryThreadStore
     interrupts: InMemoryInterruptStore
+    artifacts: ArtifactStore
     db = None
     if sqlite_path is None:
         queue = InMemoryRunQueue(clock=time.time)
         log = InMemoryEventLog()
         threads = InMemoryThreadStore()
         interrupts = InMemoryInterruptStore()
+        artifacts = InMemoryArtifactStore()
     else:
         db = asyncio.run(open_state_db(sqlite_path))
         queue = SqliteRunQueue(db)
         log = SqliteEventLog(db)
         threads = SqliteThreadStore(db)
         interrupts = SqliteInterruptStore(db)
-    artifacts = InMemoryArtifactStore()
+        artifacts = SqliteArtifactStore(db, sqlite_path.parent / "artifacts")
     checkpointer = InMemorySaver()
     backend = GatewayBackend(
         agents=agents,
@@ -233,6 +322,7 @@ def make_stack(
                         sink_factory=sink_factory,
                         poll_interval_s=0.01,
                         interrupt_store=interrupts,
+                        artifact_store=artifacts,
                     ).run(stop)
                 )
                 for agent in agents.values()

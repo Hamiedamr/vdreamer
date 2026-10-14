@@ -16,15 +16,19 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from langchain_core.runnables import RunnableConfig
 
 from vdreamer.agents import BaseAgent, BuildContext
 from vdreamer.context import VDreamerContext, bind_context
 from vdreamer.eventlog import EventSink
+from vdreamer.governance import ToolKit
 from vdreamer.streaming import StreamSpec, make_stream_driver, stream_driver_from_env
 from vdreamer.validate import ensure_compiled
+
+if TYPE_CHECKING:
+    from vdreamer.mcp import MCPRegistry
 
 #: The ``configurable`` key carrying the run id into every checkpoint (M4).
 #: LangGraph copies ``configurable`` scalars into checkpoint metadata
@@ -33,11 +37,23 @@ from vdreamer.validate import ensure_compiled
 #: checkpoint instead of re-driving the input (PRD §3.2 recovery).
 RUN_ID_CONFIGURABLE_KEY: Final[str] = "vdreamer_run_id"
 
+#: The ``configurable`` key recording the MCP tool-snapshot hash a run was
+#: built against (§2.7: "each run recording its tool-snapshot hash"); it lands
+#: in the run's checkpoint metadata the same way the run id does.
+TOOL_SNAPSHOT_CONFIGURABLE_KEY: Final[str] = "vdreamer_tool_snapshot"
+
 #: ``configurable`` keys a client's run ``config`` may not set (§2.5): the
 #: thread and checkpoint addressing are the server's, as is the run id above.
 #: Keys starting with ``__`` are LangGraph-internal and reserved as well.
 RESERVED_CONFIGURABLE_KEYS: Final[frozenset[str]] = frozenset(
-    {"thread_id", "checkpoint_id", "checkpoint_ns", "checkpoint_map", RUN_ID_CONFIGURABLE_KEY}
+    {
+        "thread_id",
+        "checkpoint_id",
+        "checkpoint_ns",
+        "checkpoint_map",
+        RUN_ID_CONFIGURABLE_KEY,
+        TOOL_SNAPSHOT_CONFIGURABLE_KEY,
+    }
 )
 
 
@@ -71,18 +87,27 @@ class AgentRunner:
         checkpointer: Any = None,
         store: Any = None,
         settings: Mapping[str, Any] | None = None,
+        mcp: MCPRegistry | None = None,
     ) -> None:
         self.agent = agent
         self._checkpointer = checkpointer
         self._compiled: Any = None
+        self._mcp = mcp
+        self._built_snapshot: str | None = None
+        policies = dict(getattr(agent, "tool_policies", {}) or {})
         self._ctx = BuildContext(
             settings=settings if settings is not None else {},
             models={},
             resources={},
-            tools=None,
+            tools=ToolKit(policies, mcp=mcp),
             checkpointer=checkpointer,
             store=store,
+            tool_policies=policies,
         )
+
+    def tool_snapshot(self) -> str | None:
+        """The MCP tool-snapshot hash, or ``None`` without MCP servers (§2.7)."""
+        return self._mcp.snapshot_hash() if self._mcp is not None else None
 
     def build(self) -> Any:
         """Build and compile the graph on the first call; cached afterwards (§2.2).
@@ -91,11 +116,17 @@ class AgentRunner:
         already-runnable graphs (compiled ``StateGraph``, functional-API
         ``@entrypoint``, ``create_agent`` / ``create_deep_agent`` prebuilts)
         pass through ``ensure_compiled`` untouched.
+
+        With MCP servers, the cache is keyed by the tool snapshot: a refresh
+        that changed the discovered tools rebuilds the graph for the next run
+        ("changes apply to new runs", §2.7); runs in flight keep their graph.
         """
-        if self._compiled is None:
+        snapshot = self.tool_snapshot()
+        if self._compiled is None or snapshot != self._built_snapshot:
             self._compiled = ensure_compiled(
                 self.agent.build(self._ctx), checkpointer=self._checkpointer
             )
+            self._built_snapshot = snapshot
         return self._compiled
 
     @property
@@ -304,6 +335,10 @@ class AgentRunner:
             The graph result (``stream_mode="values"``), unchanged.
         """
         built = self.build()
+        if self._built_snapshot is not None:
+            configurable = dict((config or {}).get("configurable") or {})
+            configurable[TOOL_SNAPSHOT_CONFIGURABLE_KEY] = self._built_snapshot
+            config = {**(config or {}), "configurable": configurable}
         resolved = self._resolve_durability(durability)
         info = self._run_info(context=context, config=config)
         if sink is None:

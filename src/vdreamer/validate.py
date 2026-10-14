@@ -10,6 +10,14 @@ proof — plus the D2 discovery flags on the CLI: ``--registry`` /
 explicit (it short-circuits inside ``resolve_agent``). Alias resolution and
 model-file probes (Milestone 7) and approval-route wiring (Milestone 8)
 extend this module as they land.
+
+Milestone 5 adds the tool checks (§2.3): **no ungoverned tools** — every
+``ToolNode`` in the compiled graph (subgraphs included) either holds only
+``GovernedTool`` proxies or runs under ``VDreamerToolMiddleware`` — and
+**approval routes wired** for per-tool gates: a headless agent's approval
+needs an ``approver_role`` (A16). ``--resources`` lets ``build()`` call
+``ctx.tools.mcp(...)``: the servers are declared but not contacted, so their
+tool lists are empty here.
 """
 
 from __future__ import annotations
@@ -19,7 +27,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pydantic
 from langgraph.graph import StateGraph
@@ -27,8 +35,13 @@ from langgraph.graph import StateGraph
 from vdreamer.agents import BaseAgent, BuildContext, Mode
 from vdreamer.context import VDreamerContext
 from vdreamer.discovery import AgentLoadError, resolve_agent
+from vdreamer.governance import GovernedTool, ToolKit, effective_policy
 from vdreamer.persistence import DEFAULT_DURABILITY
+from vdreamer.resources import ResourcesError, load_resources, resolve_resources_path
 from vdreamer.tools import InterruptPolicy, Policy, VDreamerToolMiddleware
+
+if TYPE_CHECKING:
+    from vdreamer.mcp import MCPRegistry
 
 #: Agent name == route segment (PRD §2.5): a lowercase slug.
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -98,16 +111,113 @@ def _check_input_schema(agent: BaseAgent) -> Check:
     return Check("input_schema", True, schema.__name__)
 
 
-def _check_graph(agent: BaseAgent) -> Check:
+def _build_context(agent: BaseAgent, mcp: MCPRegistry | None) -> BuildContext:
+    policies = agent.tool_policies if isinstance(agent.tool_policies, Mapping) else {}
+    return BuildContext(tools=ToolKit(policies, mcp=mcp), tool_policies=policies)
+
+
+def _check_graph(agent: BaseAgent, mcp: MCPRegistry | None = None) -> tuple[Check, Any]:
     """``build()`` must return something vdreamer can compile or run."""
     try:
-        graph = agent.build(BuildContext())
+        graph = agent.build(_build_context(agent, mcp))
         compiled = ensure_compiled(graph)
     except NotImplementedError:
-        return Check("graph.build", False, "build(ctx) is not implemented")
+        return Check("graph.build", False, "build(ctx) is not implemented"), None
     except Exception as exc:
-        return Check("graph.build", False, f"{type(exc).__name__}: {exc}")
-    return Check("graph.build", True, type(compiled).__module__ + "." + type(compiled).__qualname__)
+        return Check("graph.build", False, f"{type(exc).__name__}: {exc}"), None
+    kind = type(compiled).__module__ + "." + type(compiled).__qualname__
+    return Check("graph.build", True, kind), compiled
+
+
+def _references(obj: Any, target: type, depth: int = 0, seen: set[int] | None = None) -> bool:
+    """Whether a (composed, traced) wrapper function closes over a ``target`` instance."""
+    seen = seen if seen is not None else set()
+    if obj is None or id(obj) in seen or depth > 8:
+        return False
+    seen.add(id(obj))
+    if isinstance(obj, target):
+        return True
+    if isinstance(obj, (list, tuple)):
+        return any(_references(item, target, depth + 1, seen) for item in obj)
+    for attr in ("__self__", "__wrapped__", "__func__"):
+        if _references(getattr(obj, attr, None), target, depth + 1, seen):
+            return True
+    for cell in getattr(obj, "__closure__", None) or ():
+        try:
+            contents = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+        if _references(contents, target, depth + 1, seen):
+            return True
+    return False
+
+
+def tool_nodes(compiled: Any) -> list[Any]:
+    """Every LangGraph ``ToolNode`` in a compiled graph and its subgraphs."""
+    from langgraph.prebuilt import ToolNode
+
+    graphs = [compiled]
+    try:
+        graphs += [sub for _ns, sub in compiled.get_subgraphs(recurse=True)]
+    except Exception:  # not a Pregel graph (e.g. a bare runnable)
+        pass
+    found: list[Any] = []
+    for graph in graphs:
+        for node in (getattr(graph, "nodes", None) or {}).values():
+            bound = getattr(node, "bound", None)
+            if isinstance(bound, ToolNode) and bound not in found:
+                found.append(bound)
+    return found
+
+
+def _middleware_governed(node: Any) -> bool:
+    return _references(getattr(node, "_awrap_tool_call", None), VDreamerToolMiddleware) or (
+        _references(getattr(node, "_wrap_tool_call", None), VDreamerToolMiddleware)
+    )
+
+
+def _check_tools_governed(compiled: Any) -> Check:
+    """§2.3: no ungoverned tools — each one is a proxy or runs under the middleware."""
+    ungoverned: list[str] = []
+    count = 0
+    for node in tool_nodes(compiled):
+        tools = list(node.tools_by_name.values())
+        count += len(tools)
+        if _middleware_governed(node):
+            continue
+        ungoverned += [tool.name for tool in tools if not isinstance(tool, GovernedTool)]
+    if ungoverned:
+        return Check(
+            "tools.governed",
+            False,
+            f"ungoverned tools {sorted(ungoverned)}: wrap them with ctx.tools.govern(...) or "
+            "build the agent with ctx.agent_kwargs() (VDreamerToolMiddleware)",
+        )
+    return Check("tools.governed", True, f"{count} tool(s)" if count else "(no tool nodes)")
+
+
+def _check_approval_routes(agent: BaseAgent, compiled: Any) -> Check:
+    """§2.3 approval routes, per-tool gates: a headless run needs ``approver_role`` (A16)."""
+    policies = agent.tool_policies if isinstance(agent.tool_policies, Mapping) else {}
+    gated: list[str] = []
+    missing: list[str] = []
+    for node in tool_nodes(compiled):
+        for tool in node.tools_by_name.values():
+            policy = tool.policy if isinstance(tool, GovernedTool) else effective_policy(
+                tool, policies
+            )
+            if policy.approval is None:
+                continue
+            gated.append(tool.name)
+            if agent.mode in (Mode.HEADLESS, Mode.BOTH) and not policy.approval.approver_role:
+                missing.append(tool.name)
+    if missing:
+        return Check(
+            "approval.routes",
+            False,
+            f"headless approval gates without an approver_role (A16): {sorted(missing)}",
+        )
+    return Check("approval.routes", True, ", ".join(sorted(gated)) if gated else "(no gates)")
 
 
 def _check_policy_mapping(
@@ -195,9 +305,10 @@ def _check_agent_kwargs() -> Check:
     return Check("agent_kwargs", True, ", ".join(sorted(_AGENT_KWARGS_KEYS)))
 
 
-def validate_agent(agent: BaseAgent) -> list[Check]:
-    """Run the developer-contract checks (Milestones 0+1) against one agent."""
+def validate_agent(agent: BaseAgent, *, mcp: MCPRegistry | None = None) -> list[Check]:
+    """Run the developer-contract checks (Milestones 0, 1, 5) against one agent."""
     name = getattr(agent, "name", "")
+    graph_check, compiled = _check_graph(agent, mcp)
     checks = [
         Check(
             "name",
@@ -218,12 +329,14 @@ def validate_agent(agent: BaseAgent) -> list[Check]:
             isinstance(agent.expose_thinking, bool),
             repr(agent.expose_thinking),
         ),
-        _check_graph(agent),
+        graph_check,
         _check_policy_mapping("tool_policies", agent.tool_policies, Policy),
         _check_policy_mapping("interrupt_policies", agent.interrupt_policies, InterruptPolicy),
         _check_durability(agent),
         _check_agent_kwargs(),
     ]
+    if compiled is not None:
+        checks += [_check_tools_governed(compiled), _check_approval_routes(agent, compiled)]
     return checks
 
 
@@ -232,6 +345,7 @@ def run_validate(
     *,
     registry: str | Path | None = None,
     agents_dir: str | Path | None = None,
+    resources: str | Path | None = None,
 ) -> int:
     """CLI entry point for ``vdreamer validate``. 0 = valid, 1 = invalid.
 
@@ -248,7 +362,21 @@ def run_validate(
         print(f"validate: cannot load {spec!r}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
-    checks = validate_agent(agent)
+    mcp: MCPRegistry | None = None
+    resources_path = resolve_resources_path(resources)
+    if resources_path is not None:
+        from vdreamer.mcp import MCPRegistry, NetworkAllowlist, mcp_servers_from_resources
+
+        try:
+            configs = mcp_servers_from_resources(
+                load_resources(resources_path), allowlist=NetworkAllowlist.from_env()
+            )
+        except ResourcesError as exc:
+            print(f"validate: {exc}", file=sys.stderr)
+            return 1
+        mcp = MCPRegistry(configs)  # declared, never contacted: offline validation
+
+    checks = validate_agent(agent, mcp=mcp)
     for check in checks:
         print(f"[{'ok' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     failed = [check for check in checks if not check.ok]

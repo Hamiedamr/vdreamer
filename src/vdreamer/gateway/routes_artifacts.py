@@ -20,7 +20,7 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from vdreamer.artifacts import ArtifactRecord
+from vdreamer.artifacts import ArtifactRecord, artifact_urls
 from vdreamer.gateway.auth import API_PREFIX, Identity, current_identity
 from vdreamer.gateway.backend import GatewayBackend
 from vdreamer.gateway.common import get_backend, get_settings, jsonable
@@ -51,14 +51,6 @@ MAX_PREVIEW_LIMIT: Final[int] = 1000
 #: ``/download`` formats per kind available in this milestone — the stored
 #: bytes only. CSV/XLSX conversion of tables lands with Milestone 6.
 _NATIVE_FORMATS: Final[dict[str, str]] = {"table": "parquet"}
-
-
-def artifact_urls(artifact_id: str) -> tuple[str, str]:
-    """``(view_url, download_url)`` — the gateway routes (§3.4)."""
-    return (
-        f"{API_PREFIX}/artifacts/{artifact_id}/raw",
-        f"{API_PREFIX}/artifacts/{artifact_id}/download",
-    )
 
 
 async def _readable_or_404(

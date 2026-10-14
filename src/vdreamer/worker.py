@@ -88,6 +88,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from vdreamer import metrics
+from vdreamer.artifacts import ArtifactStore, bind_artifact_store
 from vdreamer.context import VDreamerContext
 from vdreamer.eventlog import EventSink, InMemoryEventSink
 from vdreamer.events import ErrorInfo, EventEnvelope, EventType, RunStatusPayload
@@ -281,6 +282,7 @@ class Worker:
         poll_interval_s: float = 0.1,
         recover_on_start: bool = True,
         interrupt_store: InterruptStore | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         """Wire the loop.
 
@@ -309,6 +311,9 @@ class Worker:
                 to run (or re-run) it explicitly.
             interrupt_store: where ``interrupt.requested`` envelopes become
                 §4.2 records for the gateway's inbox; ``None`` keeps none.
+            artifact_store: bound around every run, so the artifacts a run
+                writes (governed-tool overflow, §2.7 step 5) are kept for the
+                gateway's artifact routes; ``None`` keeps only the events.
         """
         self._runner = runner
         self._queue = queue
@@ -320,6 +325,7 @@ class Worker:
         self._poll_interval_s = poll_interval_s
         self._recover_on_start = recover_on_start
         self._interrupt_store = interrupt_store
+        self._artifact_store = artifact_store
         self._recovered = False
         #: The locally active runs' drain controls (``run_id → RunControl``);
         #: popped when the run settles. ``request_cancel`` and the SIGTERM
@@ -432,12 +438,13 @@ class Worker:
             if control.drain_requested:  # a drain landed before the run started
                 raise RunDrained(control.reason or "cancel")
             config = self._config_for(record)
-            await self._runner.arun(
-                await self._graph_input(record, config),
-                config=config,
-                context=self._context_for(record),
-                sink=sink,
-            )
+            with bind_artifact_store(self._artifact_store):
+                await self._runner.arun(
+                    await self._graph_input(record, config),
+                    config=config,
+                    context=self._context_for(record),
+                    sink=sink,
+                )
         except RunDrained as drained:
             await self._finish_drained(record, sink, drained.reason)
         except Exception as error:  # NodeTimeoutError/NodeError ride this too

@@ -53,12 +53,14 @@ GOLDEN_SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
         "run.status",
     ),
     # ToolAgent: the AIMessage carrying the tool call also completes as an
-    # (empty-text) message — ``tool.call`` precedes its own
-    # ``message.completed``; the ToolMessage maps to ``tool.result``.
+    # (empty-text) message. The call is ungoverned (a raw ToolMessage), so the
+    # mapper holds its ``tool.call`` until the call runs — right before the
+    # ``tool.result`` — because only then can it know no governance pipeline
+    # emitted (and redacted) it (M5).
     "tool_roundtrip": (
         "run.status",
-        "tool.call",
         "message.completed",
+        "tool.call",
         "tool.result",
         "run.status",
     ),
