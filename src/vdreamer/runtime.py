@@ -88,6 +88,8 @@ class AgentRunner:
         store: Any = None,
         settings: Mapping[str, Any] | None = None,
         mcp: MCPRegistry | None = None,
+        models: Mapping[str, Any] | None = None,
+        resources: Mapping[str, Any] | None = None,
     ) -> None:
         self.agent = agent
         self._checkpointer = checkpointer
@@ -97,8 +99,8 @@ class AgentRunner:
         policies = dict(getattr(agent, "tool_policies", {}) or {})
         self._ctx = BuildContext(
             settings=settings if settings is not None else {},
-            models={},
-            resources={},
+            models=models if models is not None else {},
+            resources=resources if resources is not None else {},
             tools=ToolKit(policies, mcp=mcp),
             checkpointer=checkpointer,
             store=store,

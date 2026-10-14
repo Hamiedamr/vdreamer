@@ -263,16 +263,32 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
 
 **Goal:** `models.yaml` and `resources.yaml` resolution (§3.6–§3.7, A35, A36, A21).
 
-- [ ] vLLM/Ollama aliases become LangChain chat models with `output_version="v1"`, each with a per-alias thinking mode (`reasoning_content`, `think_tags`).
-- [ ] fastembed aliases (dense/sparse/rerank) load once per worker from `cache_dir` as `TextEmbedding` / `SparseTextEmbedding` / `TextCrossEncoder`, with `local_files_only` and CPUExecutionProvider (A36).
-- [ ] `resources.yaml`: qdrant/neo4j/sql adapters.
-  - Pooled async clients are opened at worker start and injected, native and unwrapped, via `ctx.resources[alias]` (A35).
-  - `read_only` is enforced.
-  - Adapter class shape: `connect` / `probe` / `close`.
-- [ ] Secrets are referenced only through `*_env` keys and never written into YAML (A23).
-- [ ] `validate` / `doctor` fail on unknown aliases, unreachable endpoints, or missing model files.
+- [x] vLLM/Ollama aliases become LangChain chat models with `output_version="v1"`, each with a per-alias thinking mode (`reasoning_content`, `think_tags`). (`vdreamer.models`: `VllmChatModel` is a `ChatOpenAI` on Chat Completions that keeps vLLM's `reasoning_content`/`reasoning` field, which `ChatOpenAI` drops; `OllamaChatModel` is a `ChatOllama` (`reasoning_content` uses Ollama's own `think`). Both parse a leading `<think>…</think>` under `think_tags`, even split across chunks. The thinking mode is applied in the model layer, so streamed chunks, the final message and both stream drivers all see standard `reasoning` blocks, and reasoning is never sent back in the history. Mode `none` (the default) extracts nothing. `modalities`, `max_tokens` and `context_window` fill the model's `profile`. Every chat alias records `vdreamer_model_latency_seconds` and `vdreamer_model_tokens` per alias (§5.4). Building a model makes no request.)
+- [x] fastembed aliases (dense/sparse/rerank) load once per worker from `cache_dir` as `TextEmbedding` / `SparseTextEmbedding` / `TextCrossEncoder`, with `local_files_only` and CPUExecutionProvider (A36). (`local_files_only: false` is refused, `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` are forced before fastembed loads, and the objects are the native ones, unwrapped. `validate`/`doctor` locate the files with `lazy_load=True` and don't load the ONNX session.)
+- [x] `resources.yaml`: qdrant/neo4j/sql adapters (`vdreamer.adapters`).
+  - Pooled async clients are opened at worker start and injected, native and unwrapped, via `ctx.resources[alias]` (A35): `AsyncQdrantClient` (also qdrant's embedded `path`/`location: ":memory:"` for dev), neo4j `AsyncDriver`, SQLAlchemy `AsyncEngine` (the new `[sql]` extra). `ctx.models` / `ctx.resources` hold the agent's declared aliases only; any other alias raises a `KeyError` that says so.
+  - `read_only` is enforced:
+    - **sql:** every pooled connection goes read-only as it opens (PostgreSQL, MySQL/MariaDB, SQLite), committed so the pool's rollback doesn't undo it. Other dialects refuse `read_only`, so read-only credentials stay the primary control.
+    - **neo4j:** a guard opens `READ_ACCESS` sessions and routes `execute_query` to readers, and the server rejects writes. `execute_write` raises.
+    - **qdrant:** a guard lets the read methods through and raises on the rest.
+  - Adapter class shape: `connect` / `probe` / `close`. A new type is one `ResourceAdapter` subclass plus `register_adapter`; its `__init__` validates the entry at load. An unknown type fails at load.
+- [x] Secrets are referenced only through `*_env` keys and never written into YAML (A23). (`api_key_env`, `user_env`/`password_env`, `url_env`; inline secret keys and credentials inside a URL are refused at load. A missing variable fails at boot and in `validate`. Every declared endpoint must match `NETWORK_ALLOWLIST` at load and again at connect (A40): `NetworkAllowlist` moved to `vdreamer.network`, shared with MCP.)
+- [x] `validate` / `doctor` fail on unknown aliases, unreachable endpoints, or missing model files.
+  - `validate --models/--resources`: one check per declared alias (`model:<alias>`, `resource:<alias>`). A chat endpoint must answer and serve the configured model, fastembed files must be in the cache, and a resource must connect and pass its probe. `--no-probe` stays off the network (files and `*_env` variables are still checked). `build()` gets the real chat models, the located fastembed objects, and an unconnected placeholder per resource.
+  - `doctor --offline --models/--resources` probes every alias, resource and MCP server after the zero-egress assertion.
+  - `worker`/`dev` take `--models` (or `$VDREAMER_MODELS`). At boot they build the models, load fastembed once, probe the endpoints, and open the resources (`vdreamer.backends`). Any failure stops the process before it claims a run.
 
-**Exit:** an agent declaring models and resources passes `uv run vdreamer validate` and runs against stub backends.
+**Exit:** ✅ verified (`tests/models/test_m7_exit.py`). An agent declaring `models = ["reasoner", "local", "dense"]` and `resources = ["warehouse", "vectors"]`:
+- passes `vdreamer validate` (in process, and the real CLI in a subprocess together with `doctor --offline`);
+- runs against stub backends: an OpenAI-compatible vLLM stub and an Ollama stub over real HTTP, read-only SQLite, embedded qdrant, and a recorder in place of the fastembed class. The run goes through `open_agent_backends` + `AgentRunner` and through `vdreamer dev --input`; thinking reaches `thinking.delta` from both chat aliases;
+- fails `validate` on an unknown alias, a stopped endpoint and an empty fastembed cache.
+
+Also verified:
+- **Stream drivers:** the thinking modes give identical `thinking.delta`/`token.delta`/`message.completed` events on v2 and v3 (`test_thinking_events.py`).
+- **Live services:** the adapters ran against qdrant, Neo4j 5.26 (writes rejected by the server in READ sessions) and PostgreSQL 17 (read-only on every pooled connection), from a Linux container (155 passed).
+- **Floor pins:** the M7 suites pass (langchain-openai 1.1.0, langchain-ollama 1.0.0, SQLAlchemy 2.0.40).
+- **Not live yet:** real fastembed model loading runs only with `VDREAMER_TEST_FASTEMBED_CACHE` (no model files ship with the repo).
+- **Fixes on the way:** M2's `message.completed` crashed on real `usage_metadata`, a plain dict that the M2 code called `.model_dump()` on; it now serializes as a dict. An M5 MCP test used a Windows-only absolute path.
 
 ---
 

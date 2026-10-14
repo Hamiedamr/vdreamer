@@ -30,6 +30,7 @@ from vdreamer.mcp import (
     open_mcp_registry,
     parse_server,
 )
+from vdreamer.network import EndpointNotAllowed, EndpointUnavailable
 from vdreamer.resources import ResourcesError, parse_resources
 from vdreamer.runtime import TOOL_SNAPSHOT_CONFIGURABLE_KEY, AgentRunner
 
@@ -51,7 +52,8 @@ def stdio_entry(**extra: Any) -> dict[str, Any]:
         ({"type": "mcp", "url": "https://h/mcp", "command": PYTHON}, "exactly one of url"),
         ({"type": "mcp", "command": "server"}, "absolute path"),
         ({"type": "mcp", "command": "/usr/bin/npx", "args": ["srv"]}, "fetches packages"),
-        ({"type": "mcp", "command": "C:\\tools\\uvx.exe"}, "fetches packages"),
+        # Absolute on the host OS (a drive-letter path is not absolute on Linux).
+        ({"type": "mcp", "command": str(Path(PYTHON).with_name("uvx.exe"))}, "fetches packages"),
         ({"type": "mcp", "command": PYTHON, "args": ["-m", "pip", "x"]}, "fetches packages"),
         ({"type": "mcp", "command": str(Path(PYTHON).with_name("nope-bin"))}, "does not exist"),
         ({"type": "mcp", "url": "ftp://h/mcp"}, "http(s) URL"),
@@ -108,9 +110,9 @@ def test_the_allowlist_at_config_load() -> None:
     allow.check_config("mcp.netinv.internal")
     allow.check_config("10.20.3.4")
     allow.check_config("other.example")  # a name: decided at connect, by resolution
-    with pytest.raises(MCPConfigError, match="NETWORK_ALLOWLIST"):
+    with pytest.raises(EndpointNotAllowed, match="NETWORK_ALLOWLIST"):
         allow.check_config("192.168.1.1")
-    with pytest.raises(MCPConfigError, match="NETWORK_ALLOWLIST"):
+    with pytest.raises(EndpointNotAllowed, match="NETWORK_ALLOWLIST"):
         NetworkAllowlist.parse("*.internal").check_config("mcp.example.com")
     with pytest.raises(MCPConfigError, match="NETWORK_ALLOWLIST"):
         parse_server(
@@ -123,7 +125,7 @@ def test_the_allowlist_at_config_load() -> None:
 
 async def test_the_allowlist_at_connect_resolves_names() -> None:
     await NetworkAllowlist.parse("127.0.0.0/8, ::1").check_connect("localhost", 80)
-    with pytest.raises(MCPUnavailable, match="outside"):
+    with pytest.raises(EndpointUnavailable, match="outside"):
         await NetworkAllowlist.parse("10.0.0.0/8").check_connect("localhost", 80)
 
 

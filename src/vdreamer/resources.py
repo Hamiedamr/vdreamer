@@ -1,11 +1,12 @@
 """``resources.yaml`` loading (PRD §3.7, A35).
 
 The file maps an alias to one resource entry, each with a ``type``:
-``{vectors: {type: qdrant, ...}, netinv: {type: mcp, ...}}``. Milestone 5
-consumes the ``type: mcp`` entries (``vdreamer.mcp``, §2.7, A39); the other
-adapters (qdrant, neo4j, sql) and ``ctx.resources[alias]`` land with
-Milestone 7 — until then their entries are loaded, shape-checked, and left
-alone.
+``{vectors: {type: qdrant, ...}, netinv: {type: mcp, ...}}``. The
+``type: mcp`` entries are MCP servers (``vdreamer.mcp``, §2.7, A39); every
+other type is a resource adapter (``vdreamer.adapters``: qdrant, neo4j,
+sql, plus any registered with ``register_adapter``), opened by the worker
+and injected as ``ctx.resources[alias]`` (``vdreamer.backends``, A35). This
+module only loads the file and checks each entry's common shape.
 
 Secrets never appear in YAML (A23): an entry references environment
 variables through ``*_env`` keys, and a key that would hold a secret inline

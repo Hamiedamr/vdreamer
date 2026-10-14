@@ -18,10 +18,22 @@ Milestone 5 adds the tool checks (§2.3): **no ungoverned tools** — every
 needs an ``approver_role`` (A16). ``--resources`` lets ``build()`` call
 ``ctx.tools.mcp(...)``: the servers are declared but not contacted, so their
 tool lists are empty here.
+
+Milestone 7 adds the alias checks (§3.6, §3.7): every alias in
+``BaseAgent.models`` must be in ``models.yaml`` (``--models`` or
+``$VDREAMER_MODELS``) and every alias in ``BaseAgent.resources`` in
+``resources.yaml``. Each declared alias is then probed — a chat endpoint
+must answer and serve the configured model, a fastembed model's files must
+be in the cache, a resource must connect and pass its probe — and
+``--no-probe`` keeps validation off the network (model files and ``*_env``
+variables are still checked). ``build()`` receives the real chat models and
+fastembed objects (located, not loaded) and an unconnected placeholder per
+resource.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -37,11 +49,13 @@ from vdreamer.context import VDreamerContext
 from vdreamer.discovery import AgentLoadError, resolve_agent
 from vdreamer.governance import GovernedTool, ToolKit, effective_policy
 from vdreamer.persistence import DEFAULT_DURABILITY
-from vdreamer.resources import ResourcesError, load_resources, resolve_resources_path
+from vdreamer.resources import ResourcesError
 from vdreamer.tools import InterruptPolicy, Policy, VDreamerToolMiddleware
 
 if TYPE_CHECKING:
+    from vdreamer.backends import BackendConfig
     from vdreamer.mcp import MCPRegistry
+    from vdreamer.models import AliasMap
 
 #: Agent name == route segment (PRD §2.5): a lowercase slug.
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -111,15 +125,30 @@ def _check_input_schema(agent: BaseAgent) -> Check:
     return Check("input_schema", True, schema.__name__)
 
 
-def _build_context(agent: BaseAgent, mcp: MCPRegistry | None) -> BuildContext:
+def _build_context(
+    agent: BaseAgent,
+    mcp: MCPRegistry | None,
+    models: Mapping[str, Any] | None = None,
+    resources: Mapping[str, Any] | None = None,
+) -> BuildContext:
     policies = agent.tool_policies if isinstance(agent.tool_policies, Mapping) else {}
-    return BuildContext(tools=ToolKit(policies, mcp=mcp), tool_policies=policies)
+    return BuildContext(
+        tools=ToolKit(policies, mcp=mcp),
+        tool_policies=policies,
+        models=models if models is not None else {},
+        resources=resources if resources is not None else {},
+    )
 
 
-def _check_graph(agent: BaseAgent, mcp: MCPRegistry | None = None) -> tuple[Check, Any]:
+def _check_graph(
+    agent: BaseAgent,
+    mcp: MCPRegistry | None = None,
+    models: Mapping[str, Any] | None = None,
+    resources: Mapping[str, Any] | None = None,
+) -> tuple[Check, Any]:
     """``build()`` must return something vdreamer can compile or run."""
     try:
-        graph = agent.build(_build_context(agent, mcp))
+        graph = agent.build(_build_context(agent, mcp, models, resources))
         compiled = ensure_compiled(graph)
     except NotImplementedError:
         return Check("graph.build", False, "build(ctx) is not implemented"), None
@@ -305,10 +334,20 @@ def _check_agent_kwargs() -> Check:
     return Check("agent_kwargs", True, ", ".join(sorted(_AGENT_KWARGS_KEYS)))
 
 
-def validate_agent(agent: BaseAgent, *, mcp: MCPRegistry | None = None) -> list[Check]:
-    """Run the developer-contract checks (Milestones 0, 1, 5) against one agent."""
+def validate_agent(
+    agent: BaseAgent,
+    *,
+    mcp: MCPRegistry | None = None,
+    models: Mapping[str, Any] | None = None,
+    resources: Mapping[str, Any] | None = None,
+) -> list[Check]:
+    """Run the developer-contract checks (Milestones 0, 1, 5) against one agent.
+
+    ``models`` / ``resources`` are what ``build()`` sees as ``ctx.models`` /
+    ``ctx.resources``; the alias checks themselves are :func:`check_aliases`.
+    """
     name = getattr(agent, "name", "")
-    graph_check, compiled = _check_graph(agent, mcp)
+    graph_check, compiled = _check_graph(agent, mcp, models, resources)
     checks = [
         Check(
             "name",
@@ -340,12 +379,81 @@ def validate_agent(agent: BaseAgent, *, mcp: MCPRegistry | None = None) -> list[
     return checks
 
 
+def _declared(agent: BaseAgent, attr: str) -> list[str]:
+    value = getattr(agent, attr, ())
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return []
+    return [alias for alias in value if isinstance(alias, str)]
+
+
+async def check_aliases(
+    agent: BaseAgent, config: BackendConfig, *, probe: bool = True
+) -> tuple[list[Check], AliasMap, AliasMap]:
+    """§3.6/§3.7: each declared alias resolves and is reachable.
+
+    Returns the checks plus what ``build()`` gets: the chat models and the
+    located fastembed objects, and an :class:`Unconnected` per resource.
+    """
+    from vdreamer.adapters import probe_resource
+    from vdreamer.backends import Unconnected
+    from vdreamer.models import AliasMap, build_models, probe_model
+
+    checks: list[Check] = []
+    models: dict[str, Any] = {}
+    for alias in _declared(agent, "models"):
+        if config.models is None or alias not in config.models.aliases:
+            known = sorted(config.models.aliases) if config.models is not None else []
+            where = "no models.yaml (--models / $VDREAMER_MODELS)" if config.models is None else (
+                f"models.yaml has {known or 'none'}"
+            )
+            checks.append(Check(f"model:{alias}", False, f"unknown alias ({where})"))
+            continue
+        try:
+            detail = await probe_model(
+                config.models, alias, allowlist=config.allowlist, network=probe
+            )
+            built = await asyncio.to_thread(
+                build_models, config.models, [alias], lazy_embeddings=True
+            )
+            models.update(built)
+        except Exception as exc:  # ModelUnavailable, ModelsError, a client refusing its kwargs
+            checks.append(Check(f"model:{alias}", False, str(exc)))
+            continue
+        checks.append(Check(f"model:{alias}", True, detail))
+    resources: dict[str, Any] = {}
+    for alias in _declared(agent, "resources"):
+        if alias not in config.resources:
+            where = "no resources.yaml (--resources / $VDREAMER_RESOURCES)" if not (
+                config.resources
+            ) else f"resources.yaml has {sorted(config.resources)}"
+            checks.append(Check(f"resource:{alias}", False, f"unknown alias ({where})"))
+            continue
+        adapter = config.adapters.get(alias)
+        if adapter is None:  # an MCP server: its tools come through ctx.tools.mcp(...)
+            checks.append(Check(f"resource:{alias}", True, "mcp server (tools)"))
+            continue
+        resources[alias] = Unconnected(alias)
+        if not probe:
+            checks.append(Check(f"resource:{alias}", True, f"{adapter.type} (not contacted)"))
+            continue
+        try:
+            detail = await probe_resource(adapter)
+        except Exception as exc:
+            checks.append(Check(f"resource:{alias}", False, str(exc)))
+            continue
+        checks.append(Check(f"resource:{alias}", True, detail))
+    owner = f"agent {getattr(agent, 'name', '')!r}"
+    return checks, AliasMap("model", owner, models), AliasMap("resource", owner, resources)
+
+
 def run_validate(
     spec: str,
     *,
     registry: str | Path | None = None,
     agents_dir: str | Path | None = None,
     resources: str | Path | None = None,
+    models: str | Path | None = None,
+    probe: bool = True,
 ) -> int:
     """CLI entry point for ``vdreamer validate``. 0 = valid, 1 = invalid.
 
@@ -362,21 +470,26 @@ def run_validate(
         print(f"validate: cannot load {spec!r}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
-    mcp: MCPRegistry | None = None
-    resources_path = resolve_resources_path(resources)
-    if resources_path is not None:
-        from vdreamer.mcp import MCPRegistry, NetworkAllowlist, mcp_servers_from_resources
+    from vdreamer.backends import load_backend_config
+    from vdreamer.mcp import MCPRegistry, mcp_servers_from_resources
+    from vdreamer.models import ModelsError
+    from vdreamer.network import NetworkAllowlist
 
-        try:
-            configs = mcp_servers_from_resources(
-                load_resources(resources_path), allowlist=NetworkAllowlist.from_env()
-            )
-        except ResourcesError as exc:
-            print(f"validate: {exc}", file=sys.stderr)
-            return 1
-        mcp = MCPRegistry(configs)  # declared, never contacted: offline validation
+    allowlist = NetworkAllowlist.from_env()
+    try:
+        config = load_backend_config(models, resources, allowlist=allowlist)
+        configs = mcp_servers_from_resources(config.resources, allowlist=allowlist)
+    except (ResourcesError, ModelsError) as exc:
+        print(f"validate: {exc}", file=sys.stderr)
+        return 1
+    # MCP servers are declared, never contacted: their tool lists stay empty here.
+    mcp = MCPRegistry(configs) if config.resources else None
 
-    checks = validate_agent(agent, mcp=mcp)
+    alias_checks, built_models, placeholders = asyncio.run(
+        check_aliases(agent, config, probe=probe)
+    )
+    checks = validate_agent(agent, mcp=mcp, models=built_models, resources=placeholders)
+    checks += alias_checks
     for check in checks:
         print(f"[{'ok' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     failed = [check for check in checks if not check.ok]

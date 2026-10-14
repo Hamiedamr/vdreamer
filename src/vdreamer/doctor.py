@@ -18,6 +18,16 @@ installed), the vendored chart JS to the asset check, and a sandbox probe:
 a trivial program through ``vdreamer.sandbox`` under its rlimits, reporting
 whether the network namespace and the dedicated uid took. Windows hosts
 report the sandbox as unavailable (D19) without failing.
+
+Milestone 7 adds the backend probes (§2.3 "probes all backends, model
+files, MCP servers"), run after the egress assertion against the declared
+endpoints only: every ``models.yaml`` alias (``--models`` or
+``$VDREAMER_MODELS``) — a chat endpoint must answer and serve its model, a
+fastembed model's files must be in the cache (located, not loaded) — and
+every ``resources.yaml`` entry (``--resources`` or ``$VDREAMER_RESOURCES``):
+each resource connects and passes its probe, each MCP server starts (a
+``required`` one that does not is a failure). ``langchain_openai``,
+``langchain_ollama`` and fastembed join the guarded imports.
 """
 
 from __future__ import annotations
@@ -146,7 +156,56 @@ def _probe_sandbox() -> str | None:
     return None
 
 
-def run_offline() -> int:
+async def _probe_backends(models: str | None, resources: str | None) -> list[str]:
+    """Probe every declared model alias, resource, and MCP server; the problems."""
+    from vdreamer.adapters import probe_resource
+    from vdreamer.backends import load_backend_config
+    from vdreamer.mcp import mcp_servers_from_resources, open_mcp_registry
+    from vdreamer.models import probe_model
+    from vdreamer.network import NetworkAllowlist
+
+    allowlist = NetworkAllowlist.from_env()
+    try:
+        config = load_backend_config(models, resources, allowlist=allowlist)
+        mcp_configs = mcp_servers_from_resources(config.resources, allowlist=allowlist)
+    except ValueError as exc:  # ModelsError / ResourcesError
+        return [f"config: {exc}"]
+    problems: list[str] = []
+
+    def report(label: str, ok: bool, detail: str) -> None:
+        print(f"[{'ok' if ok else 'FAIL'}] {label}: {detail}")
+        if not ok:
+            problems.append(f"{label}: {detail}")
+
+    if config.models is not None:
+        for alias in config.models.aliases:
+            try:
+                report(f"model {alias}", True, await probe_model(
+                    config.models, alias, allowlist=allowlist
+                ))
+            except Exception as exc:
+                report(f"model {alias}", False, str(exc))
+    for alias, adapter in config.adapters.items():
+        try:
+            report(f"resource {alias}", True, await probe_resource(adapter))
+        except Exception as exc:
+            report(f"resource {alias}", False, str(exc))
+    if mcp_configs:
+        async with open_mcp_registry(mcp_configs, allowlist=allowlist, refresh=False) as registry:
+            for server in registry.servers.values():
+                label = f"mcp {server.name}"
+                if server.up:
+                    report(label, True, f"up, {len(server.tools())} tool(s)")
+                elif server.config.required:
+                    report(label, False, f"required server down: {server.last_error}")
+                else:
+                    print(f"[--] {label}: optional server down: {server.last_error}")
+    if config.models is None and not config.resources:
+        print("[--] backends: no models.yaml / resources.yaml given (--models, --resources)")
+    return problems
+
+
+def run_offline(models: str | None = None, resources: str | None = None) -> int:
     """CLI entry point for ``doctor --offline``. 0 = healthy and zero egress."""
     for key, value in OFFLINE_ENV.items():
         os.environ[key] = value
@@ -170,10 +229,21 @@ def run_offline() -> int:
             from vdreamer.mcp import _import_adapter
 
             _import_adapter()  # langchain.mcp + FastMCP (the mcp extra), M5
+        import vdreamer.adapters  # noqa: F401 — models and resources (M7)
         import vdreamer.files  # noqa: F401 — artifacts, files, sandbox (M6)
+        import vdreamer.models  # noqa: F401 — langchain_openai + langchain_ollama
         import vdreamer.sandbox  # noqa: F401
         import vdreamer.tables  # noqa: F401
-        for optional in ("pyarrow.parquet", "pyarrow.csv", "xlsxwriter", "minio"):
+        for optional in (
+            "pyarrow.parquet",
+            "pyarrow.csv",
+            "xlsxwriter",
+            "minio",
+            "fastembed",
+            "qdrant_client",
+            "neo4j",
+            "sqlalchemy.ext.asyncio",
+        ):
             if importlib.util.find_spec(optional.split(".", 1)[0]) is not None:
                 importlib.import_module(optional)
     except Exception as exc:
@@ -209,6 +279,10 @@ def run_offline() -> int:
     sandbox_problem = _probe_sandbox()
     if sandbox_problem is not None:
         problems.append(sandbox_problem)
+
+    import asyncio
+
+    problems.extend(asyncio.run(_probe_backends(models, resources)))
 
     if problems:
         for problem in problems:

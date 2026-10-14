@@ -9,8 +9,10 @@ stays explicit and wins. Milestone 3 adds the topology entrypoints: ``worker``
 D11 single-process mode on SQLite + in-memory queue), plus ``migrate`` (the
 idempotent schema application, DSN from ``VDREAMER_PG_DSN``, A23). Milestone
 4 adds ``serve`` (the REST/SSE gateway, D20) and turns ``dev`` without
-``--input`` into gateway + worker in one process. ``run`` lands with Milestone
-11, and ``export-schema``/``bundle`` with Milestone 10.
+``--input`` into gateway + worker in one process. Milestone 7 adds
+``--models`` (models.yaml) next to ``--resources`` on ``validate``,
+``doctor``, ``worker`` and ``dev``. ``run`` lands with Milestone 11, and
+``export-schema``/``bundle`` with Milestone 10.
 """
 
 from __future__ import annotations
@@ -19,6 +21,22 @@ import argparse
 from collections.abc import Sequence
 
 from vdreamer import __version__
+
+
+def _add_config_flags(parser: argparse.ArgumentParser) -> None:
+    """``--models`` / ``--resources`` (§3.6, §3.7)."""
+    parser.add_argument(
+        "--models",
+        metavar="PATH",
+        default=None,
+        help="models.yaml: model aliases (default $VDREAMER_MODELS)",
+    )
+    parser.add_argument(
+        "--resources",
+        metavar="PATH",
+        default=None,
+        help="resources.yaml: agent resources and MCP servers (default $VDREAMER_RESOURCES)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,11 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="flat directory of agent modules to resolve bare names against (D2)",
     )
+    _add_config_flags(validate_parser)
     validate_parser.add_argument(
-        "--resources",
-        metavar="PATH",
-        default=None,
-        help="resources.yaml declaring the MCP servers build() selects (not contacted)",
+        "--no-probe",
+        action="store_true",
+        help="skip the network: endpoints and resources are not contacted (model files are "
+        "still checked)",
     )
 
     doctor_parser = subparsers.add_parser(
@@ -71,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="force offline env vars and assert zero egress (required in Milestone 0)",
     )
+    _add_config_flags(doctor_parser)
 
     subparsers.add_parser(
         "migrate",
@@ -105,12 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
 
     def _add_resources_flag(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--resources",
-            metavar="PATH",
-            default=None,
-            help="resources.yaml: MCP servers and agent resources (default $VDREAMER_RESOURCES)",
-        )
+        _add_config_flags(parser)
 
     worker_parser = subparsers.add_parser(
         "worker",
@@ -237,6 +252,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             registry=args.registry,
             agents_dir=args.agents_dir,
             resources=args.resources,
+            models=args.models,
+            probe=not args.no_probe,
         )
 
     if args.command == "doctor":
@@ -244,7 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("doctor requires --offline; online probes land with Milestone 10")
         from vdreamer.doctor import run_offline
 
-        return run_offline()
+        return run_offline(models=args.models, resources=args.resources)
 
     if args.command == "migrate":
         from vdreamer.migrate import run_migrate
@@ -262,6 +279,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             metrics_host=args.metrics_host,
             metrics_port=args.metrics_port,
             resources=args.resources,
+            models=args.models,
         )
 
     if args.command == "serve":
@@ -288,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             host=args.host,
             port=args.port,
             resources=args.resources,
+            models=args.models,
         )
 
     parser.error(f"unknown command {args.command!r}")

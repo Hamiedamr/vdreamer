@@ -45,10 +45,14 @@ class BuildContext:
 
     A worker populates this once per agent before ``build()`` runs, then
     caches the graph ("build() runs once per worker", §2.2). ``settings``
-    carries deployment config; ``models`` / ``resources`` are the alias
-    wiring (populated when ``models.yaml`` / ``resources.yaml`` resolution
-    lands, Milestone 7); ``checkpointer`` / ``store`` are the runtime wiring
-    ``agent_kwargs()`` forwards to prebuilt agents.
+    carries deployment config; ``checkpointer`` / ``store`` are the runtime
+    wiring ``agent_kwargs()`` forwards to prebuilt agents.
+
+    ``models`` / ``resources`` hold the agent's declared aliases only
+    (``BaseAgent.models`` / ``BaseAgent.resources``, §3.6–§3.7): a LangChain
+    chat model or a native fastembed object per model alias, and the native
+    pooled client per resource alias (A35), opened at worker start
+    (``vdreamer.backends``). Looking up an undeclared alias is a ``KeyError``.
 
     ``tools`` is the :class:`~vdreamer.governance.ToolKit` (§2.7):
     ``ctx.tools.govern(tools)`` and ``ctx.tools.mcp(server, include=[...])``.

@@ -41,12 +41,10 @@ import asyncio
 import contextlib
 import fnmatch
 import hashlib
-import ipaddress
 import json
 import logging
 import os
 import re
-import socket
 import sys
 import time
 import urllib.parse
@@ -58,14 +56,18 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from vdreamer import metrics
 from vdreamer.governance import SOURCE_METADATA_KEY
+from vdreamer.network import (
+    NETWORK_ALLOWLIST_ENV,
+    EndpointNotAllowed,
+    EndpointUnavailable,
+    NetworkAllowlist,
+)
 from vdreamer.resources import ResourcesError, check_entry
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
 _log = logging.getLogger(__name__)
-
-NETWORK_ALLOWLIST_ENV: Final = "NETWORK_ALLOWLIST"
 
 #: Launchers that fetch and run packages at call time (A40): never allowed.
 REJECTED_LAUNCHERS: Final = frozenset(
@@ -99,87 +101,8 @@ class MCPConfigError(ResourcesError):
     """A ``type: mcp`` entry breaks a rule (shape, A23 secrets, A40 network)."""
 
 
-class MCPUnavailable(RuntimeError):
+class MCPUnavailable(EndpointUnavailable):
     """A required MCP server is not connected (the readiness probe raises it)."""
-
-
-# ---------------------------------------------------------------------------
-# NETWORK_ALLOWLIST (A40)
-# ---------------------------------------------------------------------------
-
-_Network = ipaddress.IPv4Network | ipaddress.IPv6Network
-
-
-@dataclass(frozen=True)
-class NetworkAllowlist:
-    """Comma-separated host globs (``*.internal``) and IPs/CIDRs (``10.20.0.0/16``).
-
-    A host passes when it matches a host glob, or when it is (or, at connect,
-    resolves only to) addresses inside an allowed network.
-    """
-
-    hosts: tuple[str, ...] = ()
-    networks: tuple[_Network, ...] = ()
-
-    @classmethod
-    def parse(cls, text: str) -> NetworkAllowlist:
-        hosts: list[str] = []
-        networks: list[_Network] = []
-        for raw in text.split(","):
-            entry = raw.strip().lower()
-            if not entry:
-                continue
-            try:
-                networks.append(ipaddress.ip_network(entry, strict=False))
-            except ValueError:
-                hosts.append(entry)
-        return cls(tuple(hosts), tuple(networks))
-
-    @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> NetworkAllowlist | None:
-        """The allowlist, or ``None`` when ``NETWORK_ALLOWLIST`` is unset or empty."""
-        text = (environ if environ is not None else os.environ).get(NETWORK_ALLOWLIST_ENV, "")
-        allowlist = cls.parse(text)
-        return allowlist if allowlist.hosts or allowlist.networks else None
-
-    def _host_allowed(self, host: str) -> bool:
-        return any(fnmatch.fnmatchcase(host.lower(), pattern) for pattern in self.hosts)
-
-    def _address_allowed(self, address: str) -> bool:
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            return False
-        return any(ip in network for network in self.networks)
-
-    def check_config(self, host: str) -> None:
-        """Config-load check: no DNS. A name not on the list may still resolve into
-        an allowed network, so it is deferred to :meth:`check_connect` when the
-        list has networks."""
-        if self._host_allowed(host) or self._address_allowed(host):
-            return
-        try:
-            ipaddress.ip_address(host)
-        except ValueError:
-            if self.networks:
-                return
-        raise MCPConfigError(f"host {host!r} is not on {NETWORK_ALLOWLIST_ENV}")
-
-    async def check_connect(self, host: str, port: int) -> None:
-        """Connect-time check: a name off the host list must resolve only into
-        allowed networks."""
-        if self._host_allowed(host) or self._address_allowed(host):
-            return
-        loop = asyncio.get_running_loop()
-        try:
-            infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except OSError as exc:
-            raise MCPUnavailable(f"cannot resolve {host!r}: {exc}") from exc
-        addresses = {str(info[4][0]) for info in infos}
-        if not addresses or not all(self._address_allowed(address) for address in addresses):
-            raise MCPUnavailable(
-                f"host {host!r} resolves to {sorted(addresses)}, outside {NETWORK_ALLOWLIST_ENV}"
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +201,7 @@ def _check_url(name: str, url: str, allowlist: NetworkAllowlist | None) -> None:
     if allowlist is not None:
         try:
             allowlist.check_config(parsed.hostname)
-        except MCPConfigError as exc:
+        except EndpointNotAllowed as exc:
             raise MCPConfigError(f"MCP server {name!r}: {exc}") from exc
 
 
@@ -464,7 +387,10 @@ class MCPServer:
             if self._allowlist is not None:
                 assert parsed.hostname is not None
                 port = parsed.port or (443 if parsed.scheme == "https" else 80)
-                await self._allowlist.check_connect(parsed.hostname, port)
+                try:
+                    await self._allowlist.check_connect(parsed.hostname, port)
+                except EndpointUnavailable as exc:
+                    raise MCPUnavailable(str(exc)) from exc
             token: str | None = None
             if config.bearer_env is not None:
                 token = os.environ.get(config.bearer_env)

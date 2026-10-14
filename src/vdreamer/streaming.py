@@ -233,17 +233,17 @@ class ThinkTagSplitter:
     the same instance; one splitter lives per message (the driver keys them
     by ``message_id``).
 
-    **Wiring:** a *per-alias* fallback (PRD §3.3 line 212), so it is a public,
-    unit-tested primitive here but the drivers do not route text through it
-    until ``models.yaml`` alias config (M7) selects ``think_tags`` — see
-    :func:`chunk_text_and_thinking`.
+    **Wiring:** a *per-alias* fallback (PRD §3.3 line 212). The drivers do
+    not route text through it: since Milestone 7 a ``thinking: think_tags``
+    alias parses its tags at the model layer (``vdreamer.models``), so the
+    chunks arrive here as standard ``reasoning`` blocks — on both drivers,
+    in the final message, and in the history sent back to the model. This
+    splitter stays a public primitive for agents that parse tags themselves.
 
     If the stream ends without any closing tag (a model that turned out not
     to use the think format), :meth:`close` routes the held-back tail as
     *text* — a judgment call the PRD does not cover: treating it as thinking
-    would mislabel every token of a non-think model, and per-alias config
-    (§3.6 ``thinking: think_tags``, M7) is what scopes this splitter to
-    models that do use the format.
+    would mislabel every token of a non-think model.
     """
 
     def __init__(self) -> None:
@@ -292,14 +292,12 @@ def chunk_text_and_thinking(chunk: BaseMessage) -> tuple[str, str]:
        reasoning text found wins for the chunk.
     2. The vLLM-style ``reasoning_content`` additional field.
 
-    3. The stateful think-tag splitter is the *per-alias* fallback (PRD §3.3
-       line 212: "per-alias fallbacks apply") and is **not wired here**: M2
-       has no alias config (that lands with ``models.yaml``, M7), and wiring
-       it unconditionally would route every plain-text model as thinking —
-       and diverge from the v3 driver, whose text deltas never pass through
-       a splitter (reasoning arrives as ``reasoning-delta`` blocks).
-       :class:`ThinkTagSplitter` ships public and unit-tested for M7 to wire
-       per alias into both drivers through this same function.
+    3. Think tags, the *per-alias* fallback (PRD §3.3 line 212: "per-alias
+       fallbacks apply"), are **not parsed here**: the ``models.yaml``
+       alias's ``thinking`` mode (``vdreamer.models``, Milestone 7) turns
+       ``reasoning_content`` fields and ``<think>`` tags into standard
+       ``reasoning`` blocks inside the chat model, so both drivers read
+       rule 1 and stay at parity.
     """
     content = chunk.content
     text = ""
@@ -812,8 +810,9 @@ class _RunMapper:
                 out.append(_tool_call_envelope(self.envelope, ns, tool_call))
             elif call_id not in self._governed:
                 self._held_calls[call_id] = (tuple(ns), tool_call)
+        # ``usage_metadata`` is a ``UsageMetadata`` TypedDict (a plain dict).
         usage = getattr(message, "usage_metadata", None)
-        usage_payload = usage.model_dump() if usage is not None else None
+        usage_payload = dict(usage) if usage else None
         thinking = "".join(self._thinking.get(message_id, [])) or None
         out.append(
             self.envelope(
