@@ -12,7 +12,10 @@ requires-python = ">=3.11"
 dependencies = [
     "aiosqlite>=0.20",
     "fastapi>=0.143.0",
+    "httpx>=0.28",
     "langchain>=1.4,<2",
+    "langchain-ollama>=1.0",
+    "langchain-openai>=1.1",
     "langgraph>=1.2,<2",
     "langgraph-checkpoint-postgres>=3.0",
     "langgraph-checkpoint-sqlite>=3.1.2",
@@ -51,6 +54,9 @@ sandbox = [
     "plotly>=7.1.0",
     "numpy>=2.4.6",
     "xlsxwriter>=3.2",
+]
+sql = [
+    "sqlalchemy[asyncio]>=2.0.40",
 ]
 
 [build-system]
