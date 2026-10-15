@@ -249,7 +249,7 @@ class ThinkTagSplitter:
 
     If the stream ends without any closing tag (a model that turned out not
     to use the think format), :meth:`close` routes the held-back tail as
-    *text* — a judgment call the does not cover: treating it as thinking
+    *text* — a judgment call: treating it as thinking
     would mislabel every token of a non-think model.
     """
 
@@ -870,7 +870,7 @@ class _RunMapper:
 
         Only AI messages emit ``message.completed`` — token deltas only come
         from model calls, and human/tool activity reaches the client through
-        its own turn and ``tool.result`` (a judgment call the leaves to
+        its own turn and ``tool.result`` (a judgment call left to
         the drivers; it also keeps v2 (updates parts) and v3 (values parts)
         at parity, since input messages otherwise appear only on the values
         channel). Dedup is by message id: v3 values parts re-deliver the

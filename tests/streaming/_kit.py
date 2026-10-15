@@ -353,8 +353,9 @@ async def run_graph_all_drivers(
 def normalized(envelopes: Any) -> list[Any]:
     """Envelope sequence → comparable rows (drops per-run allocations).
 
-    ``seq`` and ``ts`` are per-run allocations; ``expires_at`` is wall-clock
-    TTL math (§4.4); generated ids (``art_``/``cit_``/``int_``/``msg_``/
+    ``seq`` and ``ts`` are per-run allocations; ``expires_at`` (TTL math) and
+    ``duration_ms`` (a tool's run time) are wall-clock; generated ids
+    (``art_``/``cit_``/``int_``/``msg_``/
     ``lc_run--``/chunk ids like ``m1``) differ run to run — the v2 and v3
     chat-model protocols assign *different* ids to the same model call — so
     each distinct id maps to its first-appearance ordinal. Everything else —
@@ -367,7 +368,9 @@ def normalized(envelopes: Any) -> list[Any]:
         if isinstance(value, dict):
             out: dict[str, Any] = {}
             for key, item in value.items():
-                if key == "expires_at":
+                # Wall-clock measurements, like seq/ts: a slower driver (or a
+                # loaded CI runner) times the same tool call differently.
+                if key in ("expires_at", "duration_ms"):
                     continue
                 # ``message_id`` is a provider-assigned id (any format — the
                 # v2 and v3 protocols assign different ids to the same call),

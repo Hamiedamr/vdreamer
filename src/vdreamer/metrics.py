@@ -1,4 +1,4 @@
-"""Prometheus metrics — one registry, every family the names.
+"""Prometheus metrics — one registry, every metric family vdreamer exposes.
 
 lists: queue depth, run latency, SSE connections, model latency/tokens
 per alias, tool latency/errors per source, MCP server health, sandbox
