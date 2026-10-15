@@ -661,9 +661,16 @@ def run_terminal(
             if run_input is None:
                 try:
                     text = prompt(style.bold("you> "))
-                except EOFError:
-                    break
+                except (EOFError, KeyboardInterrupt):
+                    # Quitting at an idle prompt (Ctrl+C, Ctrl+D / Ctrl+Z): nothing
+                    # is running, so this is a plain exit, not a detach.
+                    text = ""
+                    session.say("")
                 if not text.strip():
+                    session.say(style.dim(
+                        f"[thread kept — continue it with: vdreamer run {options.agent} "
+                        f"--thread {thread_id}]"
+                    ))
                     break
                 run_input = text_input(text)
             run_id = session.start_chat(thread_id, run_input)

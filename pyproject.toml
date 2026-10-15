@@ -1,6 +1,6 @@
 [project]
 name = "vdreamer"
-version = "0.1.1"
+version = "0.1.2"
 description = "Serve LangGraph BaseAgent subclasses as a production REST/SSE API — zero generated server code, air-gap ready."
 readme = "README.md"
 license = "Apache-2.0"

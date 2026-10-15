@@ -116,6 +116,25 @@ def test_the_chat_loop_continues_the_thread(
     assert script.prompts.count("you> ") == 2  # asked again, then an empty line ended it
 
 
+def test_ctrl_c_at_the_idle_prompt_quits_instead_of_detaching(
+    gateway_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl+C while nothing runs is a plain exit; "detached" is only for a run in flight.
+    monkeypatch.setenv("VDREAMER_INTERNAL_TOKEN", TOKEN)
+
+    def ask(prompt: str) -> str:
+        raise KeyboardInterrupt
+
+    out = io.StringIO()
+    options = RunOptions(url=gateway_url, agent="echo", message="first", field_name="text",
+                         user="alice")
+    code = run_terminal(options, ask=ask, out=out)
+    text = out.getvalue()
+    assert code == 0, text
+    assert "[run completed]" in text and "detached" not in text
+    assert "--thread thread_" in text  # how to continue the thread later
+
+
 def test_a_generic_interrupt_is_answered_inline(
     gateway_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

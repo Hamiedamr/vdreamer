@@ -13,9 +13,9 @@ You write an agent as a small Python class around a LangGraph graph (a `StateGra
 Python 3.11+. Add vdreamer to your project from the GitHub release (or your internal package index):
 
 ```bash
-pip install "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.1"
+pip install "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.2"
 # or, with uv:
-uv add "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.1"
+uv add "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.2"
 ```
 
 Optional extras, added as `vdreamer[postgres,minio]` and so on:
