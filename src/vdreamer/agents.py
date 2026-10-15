@@ -39,14 +39,15 @@ class Mode(enum.Enum):
     BOTH = "both"
 
 
-def runs_headless(agent: Any) -> bool:
-    """Whether the agent's runs are headless (D15): approvals need an
-    ``approver_role`` (A16) and a ``reject`` ends the run ``rejected`` (§4.3).
+def runs_headless(agent: Any, run_headless: bool = False) -> bool:
+    """Whether a run is headless (D15): approvals need an ``approver_role``
+    (A16) and a ``reject`` ends the run ``rejected`` (§4.3).
 
-    A ``HEADLESS`` agent's runs are; a ``BOTH`` agent's runs started through
-    the chat routes are not (``/trigger`` runs, Milestone 9, will be).
+    Every run of a ``HEADLESS`` agent is. A ``BOTH`` agent's runs started
+    through the chat routes are not; its ``/trigger`` runs are, which the
+    run row carries as ``run_headless`` (``RunRecord.headless``).
     """
-    return getattr(agent, "mode", None) is Mode.HEADLESS
+    return run_headless or getattr(agent, "mode", None) is Mode.HEADLESS
 
 
 @dataclass

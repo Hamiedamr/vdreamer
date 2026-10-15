@@ -165,6 +165,11 @@ class RunRecord:
     config (§2.5); ``resume`` is the resume map ``{interrupt_id: value}`` an
     interrupt resolution plants before requeueing (§3.2: "resolution enqueues
     a resume") — the worker turns it into ``Command(resume=...)``.
+
+    The Milestone-9 columns belong to ``/trigger`` runs (D15): ``callback`` is
+    the URL the outbox reports ``completed|failed|interrupt`` to (A26), and
+    ``headless`` marks a run whose approvals have no one in front of them —
+    true for every ``/trigger`` run, even of a ``BOTH`` agent (A16, §4.3).
     """
 
     id: str
@@ -181,6 +186,8 @@ class RunRecord:
     roles: tuple[str, ...] = ()
     config: Mapping[str, Any] | None = None
     resume: Mapping[str, Any] | None = None
+    callback: str | None = None
+    headless: bool = False
 
 
 def _new_run_id() -> str:
@@ -208,12 +215,17 @@ class RunQueue(abc.ABC):
         user_id: str | None = None,
         roles: Sequence[str] = (),
         config: Mapping[str, Any] | None = None,
+        callback: str | None = None,
+        headless: bool = False,
     ) -> RunRecord:
         """Create a ``queued`` run and return its record.
 
         ``run_id`` may be supplied (the gateway does, for ``/trigger``
-        replay, A18); ``None`` generates one. ``user_id`` / ``roles`` /
-        ``config`` are stored on the row as-is (see :class:`RunRecord`).
+        replay, A18: the id is derived from the idempotency key, so a second
+        enqueue of the same key finds the id taken and raises ``ValueError``);
+        ``None`` generates one. ``user_id`` / ``roles`` / ``config`` /
+        ``callback`` / ``headless`` are stored on the row as-is (see
+        :class:`RunRecord`).
         The one-active-run-per-thread
         guard (D12/A11): when the thread already has a run in an active
         state, the call conflicts — unless ``wait_for_idle`` is set *and*
@@ -382,6 +394,8 @@ class InMemoryRunQueue(RunQueue):
         user_id: str | None = None,
         roles: Sequence[str] = (),
         config: Mapping[str, Any] | None = None,
+        callback: str | None = None,
+        headless: bool = False,
     ) -> RunRecord:
         async with self._lock:
             now = self._clock()
@@ -418,6 +432,8 @@ class InMemoryRunQueue(RunQueue):
                 user_id=user_id,
                 roles=tuple(roles),
                 config=dict(config) if config is not None else None,
+                callback=callback,
+                headless=headless,
             )
             self._runs[record.id] = record
             return record
@@ -593,15 +609,16 @@ def _load_async_connection_class() -> Any:
 _RUN_COLUMNS: Final[str] = (
     "id, thread_id, agent, input, status, attempt, "
     "claimed_by, lease_expires_at, created_at, updated_at, "
-    "user_id, roles, config, resume"
+    "user_id, roles, config, resume, callback, headless"
 )
 
 #: Idempotent DDL — WP3's ``migrate`` reuses this constant. The partial index
 #: is the one-active-run-per-thread guard (D12/A11): it covers exactly the
 #: active statuses, so the conflict check and the claim's thread-busy check
 #: are index scans. The ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` lines
-#: upgrade a Milestone-3 ``runs`` table in place (the M4 identity, config and
-#: resume columns); on a fresh table they are no-ops.
+#: upgrade an older ``runs`` table in place (the M4 identity, config and
+#: resume columns, the M9 callback and headless columns); on a fresh table they
+#: are no-ops.
 RUNS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS runs (
     id               text        PRIMARY KEY,
@@ -617,13 +634,17 @@ CREATE TABLE IF NOT EXISTS runs (
     user_id          text,
     roles            jsonb       NOT NULL DEFAULT '[]'::jsonb,
     config           jsonb,
-    resume           jsonb
+    resume           jsonb,
+    callback         text,
+    headless         boolean     NOT NULL DEFAULT false
 );
 
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS user_id text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS roles jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS config jsonb;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS resume jsonb;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS callback text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS headless boolean NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS runs_active_thread_idx
     ON runs (thread_id)
@@ -651,8 +672,10 @@ ORDER BY created_at, id
 """
 
 _ENQUEUE_SQL: Final[str] = f"""
-INSERT INTO runs (id, thread_id, agent, input, status, attempt, user_id, roles, config)
-VALUES (%s, %s, %s, %s::jsonb, 'queued', 0, %s, %s::jsonb, %s::jsonb)
+INSERT INTO runs (id, thread_id, agent, input, status, attempt, user_id, roles, config,
+                  callback, headless)
+VALUES (%s, %s, %s, %s::jsonb, 'queued', 0, %s, %s::jsonb, %s::jsonb, %s, %s)
+ON CONFLICT (id) DO NOTHING
 RETURNING {_RUN_COLUMNS}
 """
 
@@ -871,6 +894,8 @@ class PostgresRunQueue(RunQueue):
             roles=tuple(str(role) for role in roles),
             config=row[12],
             resume=row[13],
+            callback=str(row[14]) if row[14] is not None else None,
+            headless=bool(row[15]),
         )
 
     async def setup(self) -> None:
@@ -899,6 +924,8 @@ class PostgresRunQueue(RunQueue):
         user_id: str | None = None,
         roles: Sequence[str] = (),
         config: Mapping[str, Any] | None = None,
+        callback: str | None = None,
+        headless: bool = False,
     ) -> RunRecord:
         if run_id is None:
             run_id = _new_run_id()
@@ -932,11 +959,13 @@ class PostgresRunQueue(RunQueue):
                         user_id,
                         json.dumps(list(roles)),
                         _json_param(dict(config) if config is not None else None),
+                        callback,
+                        headless,
                     ),
                 )
                 row = await cur.fetchone()
-        if row is None:  # pragma: no cover - INSERT..RETURNING always yields a row
-            raise RuntimeError("runs insert returned no row")
+        if row is None:
+            raise ValueError(f"run {run_id!r} already exists")
         return self._row_to_record(row)
 
     async def claim(self, claimant: str, *, agent: str | None = None) -> RunRecord | None:

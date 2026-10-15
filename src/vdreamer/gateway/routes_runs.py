@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-import pydantic
 from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
 
@@ -24,8 +23,10 @@ from vdreamer.gateway.common import (
     owned_run_or_404,
     owned_thread_or_404,
     require_access,
+    run_config,
     run_out,
     state_channels,
+    validated_input,
 )
 from vdreamer.gateway.errors import ApiError, ErrorCode
 from vdreamer.gateway.schemas import (
@@ -51,7 +52,6 @@ from vdreamer.gateway.sse import (
     run_event_stream,
 )
 from vdreamer.queue import ACTIVE_STATES, ActiveRunConflict, RunRecord, RunState
-from vdreamer.runtime import is_reserved_configurable_key
 from vdreamer.threads import ThreadRecord
 
 _log = logging.getLogger(__name__)
@@ -208,24 +208,6 @@ async def delete_thread(thread_id: str, backend: Backend, caller: Caller) -> Res
 # -- runs --------------------------------------------------------------------------------
 
 
-def _validated_input(agent_name: str, schema: type[pydantic.BaseModel] | None, value: Any) -> Any:
-    if schema is None:
-        return value
-    try:
-        return schema.model_validate(value).model_dump(mode="json")
-    except pydantic.ValidationError as exc:
-        errors = [
-            {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
-            for error in exc.errors(include_url=False)
-        ]
-        raise ApiError(
-            422,
-            ErrorCode.INVALID_INPUT,
-            f"input does not match agent {agent_name!r}'s input_schema",
-            {"errors": errors},
-        ) from None
-
-
 @router.post(
     "/threads/{thread_id}/runs",
     status_code=202,
@@ -250,20 +232,8 @@ async def create_run(
     agent = agent_or_404(backend, thread.agent)
     require_access(agent, caller)
     _require_chat(agent.name, agent.mode)
-    run_input = _validated_input(agent.name, agent.input_schema, body.input)
-    config: dict[str, Any] | None = None
-    if body.config is not None:
-        reserved = sorted(
-            key for key in body.config.configurable if is_reserved_configurable_key(key)
-        )
-        if reserved:
-            raise ApiError(
-                422,
-                ErrorCode.INVALID_REQUEST,
-                "config.configurable sets reserved keys",
-                {"reserved_keys": reserved},
-            )
-        config = body.config.model_dump(exclude_none=True)
+    run_input = validated_input(agent.name, agent.input_schema, body.input)
+    config = run_config(body.config)
     try:
         run = await backend.queue.enqueue(
             agent.name,

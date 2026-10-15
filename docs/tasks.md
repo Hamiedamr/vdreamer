@@ -155,7 +155,7 @@ This file is derived from `docs/PRD.md` (Draft v4, protocol_version 1.0).
   - two tokens valid at once, for rotation (`VDREAMER_INTERNAL_TOKEN` + `VDREAMER_INTERNAL_TOKEN_PREVIOUS`, constant-time compare)
   - role gating via `access_roles`
   - the gateway binds to the internal interface only (`--host` refuses `0.0.0.0`/`::`)
-  - (Upstream service tokens for `/trigger`, A16, land with Milestone 9.)
+  - (Upstream service tokens for `/trigger`, A16: landed with Milestone 9, `VDREAMER_SERVICE_TOKENS`.)
 
 **Metrics**
 - [x] Prometheus: queue depth, run latency, SSE connections, model latency/tokens per alias, tool latency/errors per source, MCP health, sandbox timeouts, outbox lag. (`vdreamer.metrics`: every family is defined and exposed; queue depth, run latency (worker side, `vdreamer worker --metrics-port`) and SSE connections are recorded now, the rest by their subsystems in M5/M6/M7/M9.)
@@ -330,16 +330,17 @@ Also verified:
 
 **Goal:** the `/trigger` path and notification plumbing (D15, A26, D10).
 
-- [ ] `POST /agents/{name}/trigger`:
-  - `Idempotency-Key` required
-  - body validated against `input_schema`
-  - `202 {run_id}`; a replayed key returns `200` with the original run (A18)
-  - creates a new thread unless `thread_id` is passed
-- [ ] Outbox table and delivery for headless or role-gated interrupts: HMAC-signed webhook and/or SMTP relay, deep link `{WEB_BASE_URL}/review/{interrupt_id}`. At-least-once, with dedup on `event_id`.
-- [ ] Run callbacks (`completed|failed|interrupt`) delivered via the outbox to `CALLBACK_ALLOWLIST` URLs (A26).
-- [ ] Metric: outbox lag.
+- [x] `POST /agents/{name}/trigger`: (`gateway/routes_trigger.py`; `200`/`202`/`400`/`401`/`403`/`404`/`409`/`422`. A `CHAT` agent is `400 mode_not_supported`. The run row carries `headless=true` — every `/trigger` run is headless, even a `BOTH` agent's — so approvals need an `approver_role` and a `reject` ends it `rejected` (`agents.runs_headless(agent, run.headless)`).)
+  - `Idempotency-Key` required (`400 missing_idempotency_key`; over 255 chars → `422`)
+  - body validated against `input_schema` (`{input, config?, thread_id?, callback?}`, `extra=forbid`; `422 invalid_input`, reserved `configurable` keys `422`)
+  - `202 {run_id}`; a replayed key returns `200` with the original run (A18) (the run id is derived from `(agent, caller, key)`, so a replay — even with a different body — answers `200` + `Idempotent-Replayed: true` and creates nothing; concurrent first requests race on the id (`ON CONFLICT (id) DO NOTHING` on Postgres, `ValueError` in memory/SQLite) and the loser returns the winner's run, soft-deleting the thread it made)
+  - creates a new thread unless `thread_id` is passed (the thread must be the caller's and the agent's, else `404`; a busy thread is `409 run_conflict`)
+  - Service tokens (A16): `VDREAMER_SERVICE_TOKENS="name:token,…"` (env-only, ≥16 chars, unique names, never equal to an internal token). A service token opens only `POST /agents/{name}/trigger` and `GET /runs/{id}[/events]`; the caller is `service:<name>`, needs no `X-User-Id`, passes `access_roles`, and owns the threads/runs it starts.
+- [x] Outbox table and delivery for headless or role-gated interrupts: HMAC-signed webhook and/or SMTP relay, deep link `{WEB_BASE_URL}/review/{interrupt_id}`. At-least-once, with dedup on `event_id`. (`vdreamer.outbox`: `OUTBOX_DDL` (`vdreamer migrate` applies it) + `PostgresOutboxStore`, its in-memory twin, and `SqliteOutboxStore` for `vdreamer dev` (D11). Write side: `OutboxEventSink` wraps every event writer — each worker's per-run sink and the gateway's (cancel, headless reject, expiry) — and adds the entries *before* the event write, so a crash repeats a notification, never drops it. `event_id = sha256(run, kind, interrupt_id | status)` and entry id `{event_id}:{channel}`, so a recovered attempt that re-emits an event adds nothing. Read side: `OutboxDispatcher` in the gateway process (`serve` and `dev`) claims due entries with a lease (`FOR UPDATE SKIP LOCKED`, any number of replicas, no leader), retries with exponential backoff (5 s doubling, capped at 1 h) and parks an entry `dead` after 10 tries or at once on a permanent failure (a target off the allowlist). Bodies are compact key-sorted JSON signed `X-Vdreamer-Signature: sha256=HMAC(secret, "{timestamp}.{body}")` with `X-Vdreamer-Timestamp`/`-Event-Id`/`-Event`; no redirects, no proxy env. Env: `VDREAMER_OUTBOX_WEBHOOK_URL` (needs `VDREAMER_OUTBOX_SECRET`), `WEB_BASE_URL`, `VDREAMER_SMTP_HOST`/`_PORT`/`_FROM`/`_TO`/`_USER`/`_PASSWORD`/`_STARTTLS` (the relay is checked against `NETWORK_ALLOWLIST`). Notifications carry the link and the interrupt's routing fields, never its payload. A chat run's role-gated interrupt notifies too; an initiator-only one does not.)
+- [x] Run callbacks (`completed|failed|interrupt`) delivered via the outbox to `CALLBACK_ALLOWLIST` URLs (A26). (`CALLBACK_ALLOWLIST` uses the `NETWORK_ALLOWLIST` syntax; unset, every callback is `422 callback_not_allowed`. The URL is checked at `/trigger` — http(s), no credentials, a host glob match or a name that resolves only into the allowed networks — and again at delivery. Every terminal status but `completed` is the `failed` event, with the real status in the body; `interrupt` fires on each `interrupt.requested`.)
+- [x] Metric: outbox lag. (`vdreamer_outbox_lag_seconds`: age of the oldest pending entry, set on every dispatch pass.)
 
-**Exit:** a replayed idempotency key returns the original run; a callback is delivered at least once, with dedup.
+**Exit:** ✅ verified — a replayed idempotency key returns the original run, and a callback is delivered at least once, with dedup. `tests/api/test_trigger_m9.py` (both store backends): the trigger contract, key scoping per caller and agent, `thread_id`, the allowlist refusals, service tokens, and end to end with live workers: `test_a_completed_run_calls_back_once_signed` (smoke) — the first delivery gets a `503`, the retry delivers, the signature verifies, a key replay adds nothing — and a headless `sitecheck` run whose role-gated approval goes to the callback and the webhook under one `event_id`, then a `reject` calls back `failed` (`status: rejected`). `tests/outbox/test_outbox.py`: config validation, entry derivation, sink dedup and write order, signing, HTTP/SMTP delivery, backoff, dead-lettering, a lapsed lease redelivering the same `event_id`, SQLite persistence across a restart, the Postgres SQL shapes. Full suite: 827 passed, 25 skipped; ruff + mypy (strict) clean; `doctor --offline` green. Checked in a real `vdreamer dev` process: a service-token `/trigger` → `202`, the same key → `200` with the same run, no key → `400`, an off-list callback → `422`, and the run's signed `completed` callback received by a local endpoint. Also fixed with M9: `vdreamer worker` refuses a wildcard `--metrics-host` before opening any store. Not run live: `PostgresOutboxStore` (`tests/outbox/test_outbox.py::test_postgres_outbox_live` skips without `VDREAMER_TEST_PG_DSN`, per the SQLite-first testing phase) and a real SMTP relay.
 
 ---
 

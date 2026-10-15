@@ -75,7 +75,11 @@ def test_postgres_sql_shapes() -> None:
     assert "for update" in queue._CANCEL_SQL.lower()
     assert "coalesce(%s::jsonb, resume)" in queue._RESUME_SQL.lower()
     assert "group by status" in queue._COUNT_BY_STATUS_SQL.lower()
-    assert queue._RUN_COLUMNS.split(", ")[-4:] == ["user_id", "roles", "config", "resume"]
+    assert queue._RUN_COLUMNS.split(", ")[-6:] == [
+        "user_id", "roles", "config", "resume", "callback", "headless"
+    ]
+    # M9: a /trigger replay re-derives the run id; the insert must not raise on it.
+    assert "on conflict (id) do nothing" in queue._ENQUEUE_SQL.lower()
 
 
 def test_row_mapping_covers_the_new_columns() -> None:
@@ -85,8 +89,10 @@ def test_row_mapping_covers_the_new_columns() -> None:
     row = (
         "r1", "t1", "a", {"x": 1}, "queued", 0, None, None, now, now,
         "alice", ["dba"], {"configurable": {}}, {"int_1": {"action": "approve"}},
+        "https://hooks.internal/cb", True,
     )
     record = queue.PostgresRunQueue._row_to_record(row)
     assert record.user_id == "alice" and record.roles == ("dba",)
     assert record.config == {"configurable": {}}
     assert record.resume == {"int_1": {"action": "approve"}}
+    assert record.callback == "https://hooks.internal/cb" and record.headless is True

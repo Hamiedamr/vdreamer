@@ -31,6 +31,7 @@ class ErrorCode(enum.StrEnum):
     PROTOCOL_VERSION_MISMATCH = "protocol_version_mismatch"
     MODE_NOT_SUPPORTED = "mode_not_supported"
     INVALID_LAST_EVENT_ID = "invalid_last_event_id"
+    MISSING_IDEMPOTENCY_KEY = "missing_idempotency_key"
     # 401 / 403
     UNAUTHORIZED = "unauthorized"
     FORBIDDEN_ROLE = "forbidden_role"
@@ -55,6 +56,7 @@ class ErrorCode(enum.StrEnum):
     INVALID_INPUT = "invalid_input"
     INVALID_ACTION = "invalid_action"
     INVALID_EDIT = "invalid_edit"
+    CALLBACK_NOT_ALLOWED = "callback_not_allowed"
     UNSUPPORTED_FORMAT = "unsupported_format"
     # 5xx
     NOT_READY = "not_ready"

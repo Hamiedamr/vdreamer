@@ -39,12 +39,15 @@ from vdreamer.artifacts import ArtifactStore, InMemoryArtifactStore
 from vdreamer.eventlog import InMemoryEventLog
 from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
 from vdreamer.interrupts import InMemoryInterruptStore
+from vdreamer.network import NetworkAllowlist
+from vdreamer.outbox import InMemoryOutboxStore, OutboxEventSink, OutboxSettings
 from vdreamer.queue import InMemoryRunQueue
 from vdreamer.runtime import AgentRunner
 from vdreamer.sqlite_state import (
     SqliteArtifactStore,
     SqliteEventLog,
     SqliteInterruptStore,
+    SqliteOutboxStore,
     SqliteRunQueue,
     SqliteThreadStore,
     open_state_db,
@@ -56,6 +59,17 @@ TOKEN = "current-internal-token-0123456789"
 #: ``HITL_STRICT_SCOPES`` of every kit gateway (A32): ``strict``'s scope matches.
 STRICT_SCOPES = ("db:write:*",)
 PREVIOUS_TOKEN = "previous-internal-token-012345678"
+#: The kit's upstream service (A16): ``service:mail-worker``.
+SERVICE = "mail-worker"
+SERVICE_TOKEN = "mail-worker-service-token-0123456789"
+#: The kit's ``CALLBACK_ALLOWLIST`` (A26).
+CALLBACK_ALLOWLIST = "*.internal,10.20.0.0/16"
+#: The kit's outbox channels (M9): the operator webhook and the review deep link.
+OUTBOX_SETTINGS = OutboxSettings(
+    webhook_url="https://hooks.internal/vdreamer",
+    secret="outbox-secret-0123456789",
+    web_base_url="https://web.internal",
+)
 
 
 def headers(
@@ -404,6 +418,7 @@ class Stack:
     artifacts: ArtifactStore
     checkpointer: InMemorySaver
     db: aiosqlite.Connection | None = None
+    outbox: InMemoryOutboxStore | None = None
 
     def close(self) -> None:
         if self.db is not None:
@@ -431,6 +446,7 @@ def make_stack(
         threads = InMemoryThreadStore()
         interrupts = InMemoryInterruptStore()
         artifacts = InMemoryArtifactStore()
+        outbox: InMemoryOutboxStore = InMemoryOutboxStore()
     else:
         db = asyncio.run(open_state_db(sqlite_path))
         queue = SqliteRunQueue(db)
@@ -438,13 +454,16 @@ def make_stack(
         threads = SqliteThreadStore(db)
         interrupts = SqliteInterruptStore(db)
         artifacts = SqliteArtifactStore(db, sqlite_path.parent)
+        outbox = SqliteOutboxStore(db)
     checkpointer = InMemorySaver()
+    # Exactly the `vdreamer dev` wiring: every event write records its outbox entries.
+    writer = OutboxEventSink(log, outbox, queue, OUTBOX_SETTINGS)
     backend = GatewayBackend(
         agents=agents,
         queue=queue,
         threads=threads,
         event_reader=log,
-        event_writer=log,
+        event_writer=writer,
         hub=log.hub,
         interrupts=interrupts,
         artifacts=artifacts,
@@ -456,8 +475,8 @@ def make_stack(
 
         @contextlib.asynccontextmanager
         async def lifespan() -> AsyncIterator[None]:
-            async def sink_factory(run_id: str) -> InMemoryEventLog | SqliteEventLog:
-                return log
+            async def sink_factory(run_id: str) -> OutboxEventSink:
+                return writer
 
             stop = asyncio.Event()
             tasks = [
@@ -484,11 +503,17 @@ def make_stack(
     app = create_app(
         backend,
         GatewaySettings(
-            tokens=(TOKEN, PREVIOUS_TOKEN), heartbeat_s=heartbeat_s, strict_scopes=STRICT_SCOPES
+            tokens=(TOKEN, PREVIOUS_TOKEN),
+            heartbeat_s=heartbeat_s,
+            strict_scopes=STRICT_SCOPES,
+            service_tokens=((SERVICE, SERVICE_TOKEN),),
+            callback_allowlist=NetworkAllowlist.parse(CALLBACK_ALLOWLIST),
         ),
         lifespan=lifespan,
     )
-    return Stack(app, backend, queue, log, threads, interrupts, artifacts, checkpointer, db)
+    return Stack(
+        app, backend, queue, log, threads, interrupts, artifacts, checkpointer, db, outbox
+    )
 
 
 # -- helpers --------------------------------------------------------------------------------

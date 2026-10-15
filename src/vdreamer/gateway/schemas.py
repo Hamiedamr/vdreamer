@@ -116,6 +116,27 @@ class RunCreate(BaseModel):
     config: RunConfig | None = None
 
 
+class TriggerCreate(BaseModel):
+    """``{input, config?, thread_id?, callback?}`` for ``POST /agents/{name}/trigger`` (D15)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input: Any = Field(
+        default=None, description="The graph input; validated against the agent's input_schema."
+    )
+    config: RunConfig | None = None
+    thread_id: str | None = Field(
+        default=None,
+        description="Continue this thread (one the caller owns); omitted, a new thread is created.",
+    )
+    callback: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="URL notified when the run completes, fails or raises an interrupt; "
+        "its host must be on CALLBACK_ALLOWLIST (A26).",
+    )
+
+
 class RunCreated(BaseModel):
     run_id: str
     thread_id: str

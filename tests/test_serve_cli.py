@@ -119,3 +119,76 @@ def test_resolve_serve_agents_rejects_duplicate_names(tmp_path: Path) -> None:
     )
     with pytest.raises(ServeAgentsError, match="pinger"):
         resolve_serve_agents(["pinger:agent", "pinger"], agents_dir=str(agents_dir))
+
+
+# -- Milestone 9: the headless environment is checked before anything starts ------------------
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"VDREAMER_SERVICE_TOKENS": "mail-worker"}, "'name:token' pairs"),
+        ({"VDREAMER_SERVICE_TOKENS": "mail-worker:short"}, "at least"),
+        ({"VDREAMER_SERVICE_TOKENS": f"svc:{TOKEN}"}, "repeats an internal token"),
+        (
+            {"VDREAMER_SERVICE_TOKENS": "a b:service-token-0123456789abcdef"},
+            "must be letters",
+        ),
+        (
+            {"VDREAMER_SERVICE_TOKENS": "a:service-token-0123456789abcdef,"
+             "a:service-token-fedcba9876543210"},
+            "share a name",
+        ),
+        ({"VDREAMER_OUTBOX_WEBHOOK_URL": "https://hooks.internal/x"}, "HMAC-signed"),
+    ],
+)
+def test_serve_refuses_a_bad_headless_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    env: dict[str, str],
+    message: str,
+) -> None:
+    monkeypatch.setenv("VDREAMER_INTERNAL_TOKEN", TOKEN)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert run_serve(agents=["pinger:agent"]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_worker_refuses_a_bad_outbox_environment(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from vdreamer import entrypoints
+
+    monkeypatch.setenv("VDREAMER_OUTBOX_SECRET", "short")
+    assert entrypoints.run_worker(agent="pinger:agent") == 1
+    assert "VDREAMER_OUTBOX_SECRET" in capsys.readouterr().err
+
+
+def test_service_tokens_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vdreamer.gateway.settings import service_tokens_from_env
+
+    monkeypatch.delenv("VDREAMER_SERVICE_TOKENS", raising=False)
+    assert service_tokens_from_env() == ()
+    monkeypatch.setenv("VDREAMER_SERVICE_TOKENS", " mail:tok-a:with-colon , cron:tok-b ,")
+    assert service_tokens_from_env() == (("mail", "tok-a:with-colon"), ("cron", "tok-b"))
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "allowed"),
+    [
+        ("POST", "/api/v1/agents/sitecheck/trigger", True),
+        ("GET", "/api/v1/runs/run_1", True),
+        ("GET", "/api/v1/runs/run_1/events", True),
+        ("POST", "/api/v1/runs/run_1/cancel", False),
+        ("GET", "/api/v1/agents/sitecheck/trigger", False),
+        ("POST", "/api/v1/agents/sitecheck/threads", False),
+        ("GET", "/api/v1/threads", False),
+        ("GET", "/api/v1/interrupts", False),
+        ("GET", "/api/v1/", False),
+    ],
+)
+def test_what_a_service_token_may_call(method: str, path: str, allowed: bool) -> None:
+    from vdreamer.gateway.auth import is_service_route
+
+    assert is_service_route(method, path) is allowed

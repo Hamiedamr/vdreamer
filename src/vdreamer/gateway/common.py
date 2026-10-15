@@ -15,9 +15,10 @@ from vdreamer.agents import BaseAgent
 from vdreamer.gateway.auth import Identity
 from vdreamer.gateway.backend import GatewayBackend
 from vdreamer.gateway.errors import ApiError, ErrorCode
-from vdreamer.gateway.schemas import AgentOut, RunOut
+from vdreamer.gateway.schemas import AgentOut, RunConfig, RunOut
 from vdreamer.gateway.settings import GatewaySettings
 from vdreamer.queue import RunRecord
+from vdreamer.runtime import is_reserved_configurable_key
 from vdreamer.threads import ThreadRecord
 
 
@@ -53,9 +54,12 @@ def agent_or_404(backend: GatewayBackend, name: str) -> BaseAgent:
 
 
 def can_use(agent: BaseAgent, identity: Identity) -> bool:
-    """Agent RBAC (§2.2): ``access_roles`` empty = any user, else any one of them."""
+    """Agent RBAC (§2.2): ``access_roles`` empty = any user, else any one of them.
+
+    An upstream service (A16) is vouched for by its token, not by roles.
+    """
     roles = tuple(agent.access_roles)
-    return not roles or identity.has_any_role(roles)
+    return not roles or identity.service or identity.has_any_role(roles)
 
 
 def require_access(agent: BaseAgent, identity: Identity) -> None:
@@ -104,6 +108,42 @@ async def owned_run_or_404(
     if thread is None or thread.owner_id != identity.user_id:
         raise ApiError(404, ErrorCode.RUN_NOT_FOUND, f"no run {run_id!r}")
     return run, thread
+
+
+def validated_input(
+    agent_name: str, schema: type[pydantic.BaseModel] | None, value: Any
+) -> Any:
+    """The run input against the agent's ``input_schema`` (``422 invalid_input``)."""
+    if schema is None:
+        return value
+    try:
+        return schema.model_validate(value).model_dump(mode="json")
+    except pydantic.ValidationError as exc:
+        errors = [
+            {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+            for error in exc.errors(include_url=False)
+        ]
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_INPUT,
+            f"input does not match agent {agent_name!r}'s input_schema",
+            {"errors": errors},
+        ) from None
+
+
+def run_config(config: RunConfig | None) -> dict[str, Any] | None:
+    """The client's run config as stored on the row; reserved keys are ``422``."""
+    if config is None:
+        return None
+    reserved = sorted(key for key in config.configurable if is_reserved_configurable_key(key))
+    if reserved:
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_REQUEST,
+            "config.configurable sets reserved keys",
+            {"reserved_keys": reserved},
+        )
+    return config.model_dump(exclude_none=True)
 
 
 def run_out(run: RunRecord) -> RunOut:

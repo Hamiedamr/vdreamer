@@ -707,7 +707,7 @@ class Worker:
             attempt=record.attempt,
             # A6: stable per run — one run = one execution = one user turn.
             idempotency_key=record.id,
-            headless=runs_headless(self._runner.agent),
+            headless=runs_headless(self._runner.agent, record.headless),
         )
 
     async def _open_sink(self, run_id: str) -> EventSink:

@@ -24,6 +24,9 @@ from vdreamer.resources import ResourcesError
 
 NETWORK_ALLOWLIST_ENV: Final = "NETWORK_ALLOWLIST"
 
+#: Where run callbacks (A26) and the outbox may POST — same syntax as ``NETWORK_ALLOWLIST``.
+CALLBACK_ALLOWLIST_ENV: Final = "CALLBACK_ALLOWLIST"
+
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
@@ -65,9 +68,11 @@ class NetworkAllowlist:
         return cls(tuple(hosts), tuple(networks))
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> NetworkAllowlist | None:
-        """The allowlist, or ``None`` when ``NETWORK_ALLOWLIST`` is unset or empty."""
-        text = (environ if environ is not None else os.environ).get(NETWORK_ALLOWLIST_ENV, "")
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None, *, name: str = NETWORK_ALLOWLIST_ENV
+    ) -> NetworkAllowlist | None:
+        """The allowlist in ``name`` (``NETWORK_ALLOWLIST``), or ``None`` when unset or empty."""
+        text = (environ if environ is not None else os.environ).get(name, "")
         allowlist = cls.parse(text)
         return allowlist if allowlist.hosts or allowlist.networks else None
 
@@ -144,6 +149,7 @@ def default_port(parsed: urllib.parse.SplitResult, default: int | None = None) -
 
 
 __all__ = [
+    "CALLBACK_ALLOWLIST_ENV",
     "NETWORK_ALLOWLIST_ENV",
     "EndpointError",
     "EndpointNotAllowed",

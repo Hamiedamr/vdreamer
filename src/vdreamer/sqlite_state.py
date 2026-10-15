@@ -5,7 +5,7 @@ process (gateway + worker) keeps its runs, event log, threads, and interrupt
 records in the same file as its LangGraph checkpoints, so a restart loses
 nothing. The Postgres stores stay the production path for the later move.
 
-Runs, threads, and interrupts are *write-through*: each store subclasses its
+Runs, threads, interrupts, and the outbox are *write-through*: each store subclasses its
 in-memory twin (the tested semantics — lifecycle map, one-active-run guard,
 CAS resolve — stay in one place), loads the table at boot, and after every
 mutating call upserts the records that changed. Single process only: the
@@ -44,6 +44,7 @@ from vdreamer.interrupts import (
     InterruptStatus,
 )
 from vdreamer.objects import FilesystemObjectStore
+from vdreamer.outbox import InMemoryOutboxStore, OutboxEntry, OutboxStatus
 from vdreamer.queue import InMemoryRunQueue, RunRecord, RunState
 from vdreamer.threads import InMemoryThreadStore, ThreadRecord
 
@@ -67,6 +68,10 @@ CREATE TABLE IF NOT EXISTS vdreamer_artifacts (
     id   TEXT PRIMARY KEY,
     data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS vdreamer_outbox (
+    id   TEXT PRIMARY KEY,
+    data TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS vdreamer_run_events (
     run_id TEXT    NOT NULL,
     seq    INTEGER NOT NULL,
@@ -76,7 +81,13 @@ CREATE TABLE IF NOT EXISTS vdreamer_run_events (
 """
 
 _TABLES: Final[frozenset[str]] = frozenset(
-    {"vdreamer_runs", "vdreamer_threads", "vdreamer_interrupts", "vdreamer_artifacts"}
+    {
+        "vdreamer_runs",
+        "vdreamer_threads",
+        "vdreamer_interrupts",
+        "vdreamer_artifacts",
+        "vdreamer_outbox",
+    }
 )
 
 
@@ -148,6 +159,11 @@ def _interrupt_from(data: dict[str, Any]) -> InterruptRecord:
     data["status"] = InterruptStatus(data["status"])
     data["actions"] = tuple(data.get("actions") or ())
     return InterruptRecord(**data)
+
+
+def _outbox_from(data: dict[str, Any]) -> OutboxEntry:
+    data["status"] = OutboxStatus(data["status"])
+    return OutboxEntry(**data)
 
 
 class SqliteRunQueue(InMemoryRunQueue):
@@ -274,6 +290,39 @@ class SqliteInterruptStore(InMemoryInterruptStore):
         return await self._tracked(super().expire_overdue(now, limit=limit))
 
 
+class SqliteOutboxStore(InMemoryOutboxStore):
+    """The in-memory outbox, persisted to ``vdreamer_outbox`` (wall-clock timestamps)."""
+
+    _TABLE: Final = "vdreamer_outbox"
+
+    def __init__(self, conn: aiosqlite.Connection) -> None:
+        super().__init__(clock=time.time)
+        self._db = conn
+
+    async def load(self) -> None:
+        """Read the persisted entries back; the previous process's leases are void."""
+        for data in await _load(self._db, self._TABLE):
+            entry = _outbox_from(data)
+            self._entries[entry.id] = dataclasses.replace(entry, lease_expires_at=None)
+
+    def _tracked(self, op: Awaitable[_T]) -> Awaitable[_T]:
+        return _write_through(self._db, self._TABLE, self._entries, op)
+
+    async def add(self, entries: Sequence[OutboxEntry]) -> int:
+        return await self._tracked(super().add(entries))
+
+    async def claim(
+        self, *, channels: Sequence[str], limit: int, lease_s: float
+    ) -> list[OutboxEntry]:
+        return await self._tracked(super().claim(channels=channels, limit=limit, lease_s=lease_s))
+
+    async def complete(self, entry_id: str) -> None:
+        await self._tracked(super().complete(entry_id))
+
+    async def fail(self, entry_id: str, error: str, *, retry_at: float | None) -> None:
+        await self._tracked(super().fail(entry_id, error, retry_at=retry_at))
+
+
 class SqliteEventLog(EventSink, EventReader):
     """The shared dev event log on ``vdreamer_run_events`` (the A3 replay source).
 
@@ -364,6 +413,7 @@ class SqliteState:
     interrupts: SqliteInterruptStore
     events: SqliteEventLog
     artifacts: SqliteArtifactStore
+    outbox: SqliteOutboxStore
 
 
 @asynccontextmanager
@@ -389,10 +439,12 @@ async def open_sqlite_state(
             interrupts=SqliteInterruptStore(conn),
             events=SqliteEventLog(conn, hub),
             artifacts=SqliteArtifactStore(conn, root),
+            outbox=SqliteOutboxStore(conn),
         )
         await state.queue.load()
         await state.threads.load()
         await state.interrupts.load()
+        await state.outbox.load()
         yield state
     finally:
         await conn.close()

@@ -62,7 +62,7 @@ from vdreamer.interrupts import (
     is_strict_scope,
     visible_to,
 )
-from vdreamer.queue import InvalidTransition, RunState
+from vdreamer.queue import InvalidTransition, RunRecord, RunState
 
 _log = logging.getLogger(__name__)
 
@@ -397,18 +397,20 @@ def _check_authority(record: InterruptRecord, caller: Identity, settings: Gatewa
 
 
 def _ends_run_rejected(
-    backend: GatewayBackend, record: InterruptRecord, body: ResolveRequest
+    backend: GatewayBackend, record: InterruptRecord, body: ResolveRequest, run: RunRecord | None
 ) -> bool:
     """§4.3: a headless ``reject`` of an approval ends the run ``rejected``.
 
     Approvals are ``require_approval`` interrupts (incl. ``ApprovalGate`` and
     per-tool gates). A tool review's ``reject`` is the middleware's own
     decision (the model is told) and an elicitation's is a decline: those resume.
+    ``run`` is the interrupt's run: a ``/trigger`` run of a ``BOTH`` agent is
+    headless though the agent is not.
     """
     if body.action != "reject" or record.kind in POLICY_KINDS:
         return False
     agent = backend.agents.get(record.agent)
-    return agent is not None and runs_headless(agent)
+    return agent is not None and runs_headless(agent, run is not None and run.headless)
 
 
 @router.post(
@@ -482,8 +484,8 @@ async def resolve_interrupt(
             ).event_payload(),
         )
     )
-    if _ends_run_rejected(backend, resolved, body):
-        run = await backend.queue.get(resolved.run_id)
+    run = await backend.queue.get(resolved.run_id)
+    if _ends_run_rejected(backend, resolved, body, run):
         if run is not None:
             await end_waiting_run(
                 backend.queue, backend.interrupts, backend.event_writer, run, RunState.REJECTED

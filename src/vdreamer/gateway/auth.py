@@ -16,6 +16,10 @@ A14: "token checked first". In order, for every ``/api/v1`` request outside
    missing_identity``. ``X-User-Roles`` is a comma-separated list (may be
    empty).
 
+A service token (A16, ``VDREAMER_SERVICE_TOKENS``) replaces steps 1 and 3 on
+:func:`is_service_route` only: the caller is ``service:<name>`` and sends no
+identity headers.
+
 The resolved :class:`Identity` rides ``scope["state"]["identity"]``; routes
 read it through :func:`current_identity`. Every response also gets
 ``X-Content-Type-Options: nosniff``.
@@ -63,10 +67,14 @@ _PROTOCOL_MAJOR: Final[str] = PROTOCOL_VERSION.split(".", 1)[0]
 
 @dataclass(frozen=True)
 class Identity:
-    """The end user a request acts for (D13) — as asserted by the Web Backend."""
+    """The end user a request acts for (D13) — as asserted by the Web Backend.
+
+    An upstream service (A16) acts as ``service:<name>`` with ``service`` set.
+    """
 
     user_id: str
     roles: tuple[str, ...] = ()
+    service: bool = False
 
     def has_any_role(self, roles: Sequence[str]) -> bool:
         """Whether the user holds at least one of ``roles``."""
@@ -95,23 +103,64 @@ def _protocol_major(value: str) -> str:
     return value.strip().split(".", 1)[0]
 
 
-class InternalAuthMiddleware:
-    """Token → protocol version → identity, ahead of routing (A14, §6.1)."""
+def _presented_token(authorization: str | None) -> bytes | None:
+    if authorization is None:
+        return None
+    scheme, _, credentials = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not credentials.strip():
+        return None
+    return credentials.strip().encode("utf-8")
 
-    def __init__(self, app: ASGIApp, *, tokens: Sequence[str]) -> None:
+
+def is_service_route(method: str, path: str) -> bool:
+    """What a service token (A16) may call: trigger, and read the runs it started."""
+    parts = path.removeprefix(API_PREFIX).strip("/").split("/")
+    if method == "POST":
+        return len(parts) == 3 and parts[0] == "agents" and parts[2] == "trigger"
+    if method == "GET":
+        if parts[0] != "runs":
+            return False
+        return len(parts) == 2 or (len(parts) == 3 and parts[2] == "events")
+    return False
+
+
+class InternalAuthMiddleware:
+    """Token → protocol version → identity, ahead of routing (A14, §6.1).
+
+    A service token (A16) is accepted on :func:`is_service_route` only; its
+    caller is ``service:<name>`` and carries no ``X-User-Id``.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        tokens: Sequence[str],
+        service_tokens: Sequence[tuple[str, str]] = (),
+    ) -> None:
         self.app = app
         self._tokens = tuple(token.encode("utf-8") for token in tokens)
+        self._service_tokens = tuple(
+            (name, token.encode("utf-8")) for name, token in service_tokens
+        )
 
     def _token_ok(self, authorization: str | None) -> bool:
-        if authorization is None:
+        presented = _presented_token(authorization)
+        if presented is None:
             return False
-        scheme, _, credentials = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not credentials.strip():
-            return False
-        presented = credentials.strip().encode("utf-8")
         # Compare against every token (no early exit): constant time overall.
         matches = [hmac.compare_digest(presented, token) for token in self._tokens]
         return any(matches)
+
+    def _service_name(self, authorization: str | None) -> str | None:
+        presented = _presented_token(authorization)
+        if presented is None:
+            return None
+        found: str | None = None
+        for name, token in self._service_tokens:
+            if hmac.compare_digest(presented, token):
+                found = name
+        return found
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -137,7 +186,12 @@ class InternalAuthMiddleware:
             return
 
         public = path in PUBLIC_PATHS
-        if not public and not self._token_ok(_header(scope, "authorization")):
+        authorization = _header(scope, "authorization")
+        internal = not public and self._token_ok(authorization)
+        service: str | None = None
+        if not public and not internal and is_service_route(scope.get("method", ""), path):
+            service = self._service_name(authorization)
+        if not public and not internal and service is None:
             response = error_response(
                 401,
                 ErrorCode.UNAUTHORIZED,
@@ -158,7 +212,10 @@ class InternalAuthMiddleware:
             await response(scope, receive, send_with_headers)
             return
 
-        if not public:
+        state: dict[str, Any] = scope.setdefault("state", {})
+        if service is not None:
+            state["identity"] = Identity(user_id=f"service:{service}", service=True)
+        elif not public:
             user_id = (_header(scope, USER_ID_HEADER) or "").strip()
             if not user_id:
                 response = error_response(
@@ -168,7 +225,6 @@ class InternalAuthMiddleware:
                 )
                 await response(scope, receive, send_with_headers)
                 return
-            state: dict[str, Any] = scope.setdefault("state", {})
             state["identity"] = Identity(
                 user_id=user_id, roles=parse_roles(_header(scope, USER_ROLES_HEADER))
             )

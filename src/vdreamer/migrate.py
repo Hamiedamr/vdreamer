@@ -1,10 +1,11 @@
-"""``vdreamer migrate`` — apply the vdreamer schema (PRD §2.3; M3 WP3, M4, M6).
+"""``vdreamer migrate`` — apply the vdreamer schema (PRD §2.3; M3 WP3, M4, M6, M9).
 
 Creates the vdreamer tables — ``runs`` (:data:`vdreamer.queue.RUNS_DDL`, which
-also upgrades a Milestone-3 table in place), ``run_events``
+also upgrades an older table in place), ``run_events``
 (:data:`vdreamer.eventlog.RUN_EVENTS_DDL`), ``threads``
 (:data:`vdreamer.threads.THREADS_DDL`), ``interrupts``
-(:data:`vdreamer.interrupts.INTERRUPTS_DDL`) and ``artifacts``
+(:data:`vdreamer.interrupts.INTERRUPTS_DDL`), ``outbox``
+(:data:`vdreamer.outbox.OUTBOX_DDL`) and ``artifacts``
 (:data:`vdreamer.artifacts.ARTIFACTS_DDL`) — plus the checkpointer's own
 tables (``AsyncPostgresSaver.setup()`` runs its
 migrations). Every step is ``CREATE ... IF NOT EXISTS`` idempotent: running
@@ -14,8 +15,8 @@ The DSN comes from the environment only (A23): ``VDREAMER_PG_DSN``, resolved
 by :func:`vdreamer.persistence.dsn_from_env` — never a command-line argument,
 never YAML. With ``VDREAMER_MINIO_*`` set it also creates the MinIO bucket
 and its 30-day lifecycle rule on ``artifacts/`` and ``extracted/`` (A9).
-Later milestones extend this command as their tables land (outbox); the DDL
-constants live beside their writers.
+Later milestones extend this command as their tables land; the DDL constants
+live beside their writers.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from vdreamer.objects import (
     MinioConfigError,
     MinioObjectStore,
 )
+from vdreamer.outbox import PostgresOutboxStore
 from vdreamer.persistence import (
     PG_DSN_ENV_VAR,
     MissingPostgresDependencyError,
@@ -60,6 +62,9 @@ async def _apply(dsn: str) -> None:
 
     await PostgresInterruptStore(dsn).setup()
     print("[ok] interrupts table (vdreamer.interrupts.INTERRUPTS_DDL)")
+
+    await PostgresOutboxStore(dsn).setup()
+    print("[ok] outbox table (vdreamer.outbox.OUTBOX_DDL)")
 
     objects = MinioObjectStore.from_env()
     await PostgresArtifactStore(dsn, objects or UnavailableArtifactStore().objects).setup()

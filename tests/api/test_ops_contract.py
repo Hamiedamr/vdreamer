@@ -102,6 +102,7 @@ EXPECTED_OPERATIONS = {
     ("get", "/api/v1/threads/{thread_id}"),
     ("delete", "/api/v1/threads/{thread_id}"),
     ("post", "/api/v1/threads/{thread_id}/runs"),
+    ("post", "/api/v1/agents/{name}/trigger"),
     ("get", "/api/v1/runs/{run_id}"),
     ("post", "/api/v1/runs/{run_id}/cancel"),
     ("get", "/api/v1/runs/{run_id}/events"),

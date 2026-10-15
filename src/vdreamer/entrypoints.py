@@ -41,6 +41,13 @@ chat endpoints, and open its resource clients (``vdreamer.backends``),
 which ``build()`` receives as ``ctx.models`` / ``ctx.resources``. Any
 failure — an unknown alias, an endpoint down, a missing model file or
 ``*_env`` variable — stops the process before it claims a run.
+
+Milestone 9 adds the headless entry: ``serve`` and ``dev`` read
+``VDREAMER_SERVICE_TOKENS`` (A16) and ``CALLBACK_ALLOWLIST`` (A26) for
+``POST /agents/{name}/trigger``, and run the outbox dispatcher in the gateway
+process. Every event writer — the gateway's and each worker's — is wrapped in
+``OutboxEventSink``, so the callback and notification entries are recorded
+with the events (``vdreamer.outbox``).
 """
 
 from __future__ import annotations
@@ -55,6 +62,7 @@ import socket
 import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -98,6 +106,13 @@ from vdreamer.mcp import MCPRegistry, MCPServerConfig
 from vdreamer.models import ModelsError, ModelUnavailable
 from vdreamer.network import NetworkAllowlist
 from vdreamer.objects import MINIO_ENDPOINT_ENV, MinioConfigError, MinioObjectStore
+from vdreamer.outbox import (
+    OutboxConfigError,
+    OutboxEventSink,
+    OutboxSettings,
+    PostgresOutboxStore,
+    build_dispatcher,
+)
 from vdreamer.persistence import (
     PG_DSN_ENV_VAR,
     MissingPostgresDependencyError,
@@ -183,6 +198,66 @@ def _load_config(
 BACKEND_ERRORS = (ModelsError, ResourcesError, ModelUnavailable, ResourceUnavailable)
 
 
+# ---------------------------------------------------------------------------
+# Headless trigger, outbox and callbacks (M9, A16, A26)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HeadlessConfig:
+    """What the gateway reads from the environment for ``/trigger``: the upstream
+    service tokens, ``CALLBACK_ALLOWLIST``, and the outbox's channels."""
+
+    outbox: OutboxSettings = field(default_factory=OutboxSettings)
+    service_tokens: tuple[tuple[str, str], ...] = ()
+    callback_allowlist: NetworkAllowlist | None = None
+
+    def summary(self) -> str:
+        parts = [
+            "callbacks on"
+            if self.callback_allowlist is not None
+            else "callbacks off (CALLBACK_ALLOWLIST unset)"
+        ]
+        if self.outbox.webhook_url is not None:
+            parts.append("webhook")
+        if self.outbox.smtp is not None:
+            parts.append("email")
+        if self.service_tokens:
+            parts.append(f"{len(self.service_tokens)} service token(s)")
+        return ", ".join(parts)
+
+
+def _outbox_settings(command: str) -> OutboxSettings | None:
+    """The outbox's environment; ``None`` (printed) when it is incomplete or unsafe."""
+    try:
+        return OutboxSettings.from_env()
+    except OutboxConfigError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+
+
+def _headless_config(command: str, tokens: tuple[str, ...]) -> HeadlessConfig | None:
+    """The gateway's M9 environment, checked against ``tokens``; ``None`` (printed) when wrong."""
+    from vdreamer.gateway import GatewaySettings
+    from vdreamer.gateway.settings import (
+        GatewayConfigError,
+        callback_allowlist_from_env,
+        service_tokens_from_env,
+    )
+
+    outbox = _outbox_settings(command)
+    if outbox is None:
+        return None
+    try:
+        service_tokens = service_tokens_from_env()
+        allowlist = callback_allowlist_from_env()
+        GatewaySettings(tokens=tokens, service_tokens=service_tokens, callback_allowlist=allowlist)
+    except GatewayConfigError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+    return HeadlessConfig(outbox, service_tokens, allowlist)
+
+
 @asynccontextmanager
 async def _open_mcp(
     command: str, configs: Sequence[MCPServerConfig]
@@ -252,12 +327,15 @@ async def _worker_main(
     metrics_port: int | None,
     mcp_configs: Sequence[MCPServerConfig] = (),
     backend_config: BackendConfig | None = None,
+    outbox_settings: OutboxSettings | None = None,
 ) -> int:
     """The worker process body: everything inside the checkpointer's lifetime."""
     queue = PostgresRunQueue(dsn)
     await queue.setup()  # boot-time guard; `vdreamer migrate` is the explicit path
     interrupts = PostgresInterruptStore(dsn)
     await interrupts.setup()
+    outbox = PostgresOutboxStore(dsn)
+    await outbox.setup()
     artifacts, _ = await _open_artifact_store("worker", dsn)
     if metrics_port is not None:
         _start_metrics_server("worker", metrics_host, metrics_port)
@@ -281,7 +359,12 @@ async def _worker_main(
             )
 
             async def sink_factory(run_id: str) -> EventSink:
-                return await PostgresEventLog.connect(dsn)
+                return OutboxEventSink(
+                    await PostgresEventLog.connect(dsn),
+                    outbox,
+                    queue,
+                    outbox_settings or OutboxSettings(),
+                )
 
             worker = Worker(
                 runner,
@@ -321,6 +404,14 @@ def run_worker(
     models: str | None = None,
 ) -> int:
     """CLI entry point for ``vdreamer worker`` (PRD §2.1)."""
+    if metrics_port is not None:
+        from vdreamer.gateway.settings import GatewayConfigError, validate_bind_host
+
+        try:  # refuse a wildcard bind before any store is opened (A14, §5.1)
+            validate_bind_host(metrics_host)
+        except GatewayConfigError as exc:
+            print(f"worker: {exc}", file=sys.stderr)
+            return 1
     resolved = _resolve_cli_agent("worker", agent, registry, agents_dir)
     if resolved is None:
         return 1
@@ -328,6 +419,9 @@ def run_worker(
     if loaded is None:
         return 1
     mcp_configs, backend_config = loaded
+    outbox_settings = _outbox_settings("worker")
+    if outbox_settings is None:
+        return 1
     try:
         dsn = dsn_from_env(PG_DSN_ENV_VAR)
     except PersistenceConfigError as exc:
@@ -343,6 +437,7 @@ def run_worker(
                 metrics_port,
                 mcp_configs,
                 backend_config,
+                outbox_settings,
             )
         )
     except MissingPostgresDependencyError as exc:
@@ -384,20 +479,23 @@ async def _dev_gateway(
     tokens: tuple[str, ...],
     mcp: MCPRegistry | None = None,
     backends: AgentBackends | None = None,
+    headless: HeadlessConfig | None = None,
 ) -> int:
     """``vdreamer dev`` without ``--input``: gateway + worker loop in one process (D11).
 
-    Runs, events, threads, interrupts, and artifact metadata live in ``state``
-    — the same SQLite file as the checkpoints (artifact bytes beside it) — so
-    a restart resumes where the last process stopped (the testing phase runs
-    on SQLite, not Postgres). Required MCP servers are ``/readyz`` probes.
+    Runs, events, threads, interrupts, outbox, and artifact metadata live in
+    ``state`` — the same SQLite file as the checkpoints (artifact bytes beside
+    it) — so a restart resumes where the last process stopped (the testing
+    phase runs on SQLite, not Postgres). Required MCP servers are ``/readyz``
+    probes.
     """
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
     from vdreamer.gateway.settings import strict_scopes_from_env
 
+    headless = headless or HeadlessConfig()
     queue = state.queue
-    log = state.events
     interrupts = state.interrupts
+    log = OutboxEventSink(state.events, state.outbox, queue, headless.outbox)
     runner = AgentRunner(
         agent,
         checkpointer=checkpointer,
@@ -424,9 +522,9 @@ async def _dev_gateway(
         agents={agent.name: agent},
         queue=queue,
         threads=state.threads,
-        event_reader=log,
+        event_reader=state.events,
         event_writer=log,
-        hub=log.hub,
+        hub=state.events.hub,
         interrupts=interrupts,
         artifacts=state.artifacts,
         checkpointer=checkpointer,
@@ -435,21 +533,29 @@ async def _dev_gateway(
 
     # §4.4: one process, so the sweeper is always the leader.
     sweeper = InterruptSweeper(interrupts, queue, log)
+    dispatcher = build_dispatcher(state.outbox, headless.outbox, headless.callback_allowlist)
 
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[None]:
         stop = asyncio.Event()
         loop_task = asyncio.create_task(worker.run(stop), name="vdreamer-dev-worker")
         sweep_task = asyncio.create_task(sweeper.run(stop), name="vdreamer-dev-sweeper")
+        outbox_task = asyncio.create_task(dispatcher.run(stop), name="vdreamer-dev-outbox")
         try:
             yield
         finally:
             stop.set()
             with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.wait_for(asyncio.gather(loop_task, sweep_task), 5.0)
+                await asyncio.wait_for(asyncio.gather(loop_task, sweep_task, outbox_task), 5.0)
 
-    settings = GatewaySettings(tokens=tokens, strict_scopes=strict_scopes_from_env())
+    settings = GatewaySettings(
+        tokens=tokens,
+        strict_scopes=strict_scopes_from_env(),
+        service_tokens=headless.service_tokens,
+        callback_allowlist=headless.callback_allowlist,
+    )
     app = create_app(backend, settings, lifespan=lifespan)
+    print(f"vdreamer dev: trigger/outbox: {headless.summary()}")
     print(f"vdreamer dev: gateway on http://{host}:{port}/api/v1 (docs: /api/v1/docs)")
     await _uvicorn_serve(app, host, port)
     print("vdreamer dev: stopped")
@@ -466,6 +572,7 @@ async def _dev_main(
     tokens: tuple[str, ...] = (),
     mcp_configs: Sequence[MCPServerConfig] = (),
     backend_config: BackendConfig | None = None,
+    headless: HeadlessConfig | None = None,
 ) -> int:
     """The dev process body: the gateway + worker until Ctrl-C, or one smoke run."""
     sinks: dict[str, InMemoryEventSink] = {}
@@ -496,7 +603,7 @@ async def _dev_main(
                     + (f" — removed {expired} past retention" if expired else "")
                 )
                 return await _dev_gateway(
-                    agent, checkpointer, state, host, port, tokens, mcp, backends
+                    agent, checkpointer, state, host, port, tokens, mcp, backends, headless
                 )
         runner = AgentRunner(
             agent,
@@ -562,6 +669,7 @@ def run_dev(
         return 1
     mcp_configs, backend_config = loaded
     tokens: tuple[str, ...] = ()
+    headless: HeadlessConfig | None = None
     if input_json is None:
         from vdreamer.gateway.settings import (
             TOKEN_ENV_VAR,
@@ -580,6 +688,9 @@ def run_dev(
             # Dev convenience: no token configured → a fresh one for this process.
             tokens = (secrets.token_urlsafe(24),)
             print(f"vdreamer dev: {TOKEN_ENV_VAR} unset — using a one-off token: {tokens[0]}")
+        headless = _headless_config("dev", tokens)
+        if headless is None:
+            return 1
     try:
         return asyncio.run(
             _dev_main(
@@ -592,6 +703,7 @@ def run_dev(
                 tokens,
                 mcp_configs,
                 backend_config,
+                headless,
             )
         )
     except MissingPostgresDependencyError as exc:  # pragma: no cover - dev never touches psycopg
@@ -668,19 +780,27 @@ def resolve_serve_agents(
 
 
 async def _serve_main(
-    agents: dict[str, BaseAgent], dsn: str, tokens: tuple[str, ...], host: str, port: int
+    agents: dict[str, BaseAgent],
+    dsn: str,
+    tokens: tuple[str, ...],
+    host: str,
+    port: int,
+    headless: HeadlessConfig | None = None,
 ) -> int:
     """The gateway process body: Postgres stores, ``LISTEN`` loop, uvicorn (§2.1)."""
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
     from vdreamer.gateway.settings import strict_scopes_from_env
 
+    headless = headless or HeadlessConfig()
     queue = PostgresRunQueue(dsn)
     threads = PostgresThreadStore(dsn)
     interrupts = PostgresInterruptStore(dsn)
+    outbox = PostgresOutboxStore(dsn)
     # Boot-time guards, like the worker's; `vdreamer migrate` is the explicit path.
     await queue.setup()
     await threads.setup()
     await interrupts.setup()
+    await outbox.setup()
     log = await PostgresEventLog.connect(dsn)
     try:
         await log.setup()
@@ -694,6 +814,7 @@ async def _serve_main(
     hub = EventHub()
     listener = PostgresEventListener(dsn, hub)
     store = PostgresEventStore(dsn)
+    writer = OutboxEventSink(store, outbox, queue, headless.outbox)
 
     async with open_checkpointer(dsn) as saver:
         backend = GatewayBackend(
@@ -701,7 +822,7 @@ async def _serve_main(
             queue=queue,
             threads=threads,
             event_reader=store,
-            event_writer=store,
+            event_writer=writer,
             hub=hub,
             interrupts=interrupts,
             artifacts=artifacts,
@@ -711,26 +832,35 @@ async def _serve_main(
 
         # §4.4: every replica runs a sweeper; the advisory lock elects the one that sweeps.
         sweeper = InterruptSweeper(
-            interrupts, queue, store, leader=PostgresAdvisoryLeader(dsn)
+            interrupts, queue, writer, leader=PostgresAdvisoryLeader(dsn)
         )
+        # Leases make any number of replicas safe: each delivers what it claims.
+        dispatcher = build_dispatcher(outbox, headless.outbox, headless.callback_allowlist)
 
         @asynccontextmanager
         async def lifespan() -> AsyncIterator[None]:
             listener.start()
             stop = asyncio.Event()
             sweep_task = asyncio.create_task(sweeper.run(stop), name="vdreamer-sweeper")
+            outbox_task = asyncio.create_task(dispatcher.run(stop), name="vdreamer-outbox")
             try:
                 yield
             finally:
                 stop.set()
                 with contextlib.suppress(asyncio.CancelledError, TimeoutError):
-                    await asyncio.wait_for(sweep_task, 5.0)
+                    await asyncio.wait_for(asyncio.gather(sweep_task, outbox_task), 5.0)
                 await listener.stop()
 
-        settings = GatewaySettings(tokens=tokens, strict_scopes=strict_scopes_from_env())
+        settings = GatewaySettings(
+            tokens=tokens,
+            strict_scopes=strict_scopes_from_env(),
+            service_tokens=headless.service_tokens,
+            callback_allowlist=headless.callback_allowlist,
+        )
         app = create_app(backend, settings, lifespan=lifespan)
         names = ", ".join(sorted(agents))
         print(f"vdreamer serve: agents {names}")
+        print(f"vdreamer serve: trigger/outbox: {headless.summary()}")
         print(f"vdreamer serve: http://{host}:{port}/api/v1 (docs: /api/v1/docs)")
         await _uvicorn_serve(app, host, port)
     print("vdreamer serve: stopped")
@@ -754,6 +884,9 @@ def run_serve(
     except GatewayConfigError as exc:
         print(f"serve: {exc}", file=sys.stderr)
         return 1
+    headless = _headless_config("serve", tokens)
+    if headless is None:
+        return 1
     try:
         served = resolve_serve_agents(agents, registry=registry, agents_dir=agents_dir)
     except (AgentLoadError, ServeAgentsError) as exc:
@@ -768,7 +901,7 @@ def run_serve(
         print(f"serve: {exc}", file=sys.stderr)
         return 1
     try:
-        return asyncio.run(_serve_main(served, dsn, tokens, host, port))
+        return asyncio.run(_serve_main(served, dsn, tokens, host, port, headless))
     except (MissingPostgresDependencyError, MinioConfigError) as exc:
         print(f"serve: {exc}", file=sys.stderr)
         return 1

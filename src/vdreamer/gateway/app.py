@@ -17,7 +17,13 @@ from fastapi.staticfiles import StaticFiles
 
 from vdreamer import __version__
 from vdreamer.events import PROTOCOL_VERSION
-from vdreamer.gateway import routes_artifacts, routes_interrupts, routes_ops, routes_runs
+from vdreamer.gateway import (
+    routes_artifacts,
+    routes_interrupts,
+    routes_ops,
+    routes_runs,
+    routes_trigger,
+)
 from vdreamer.gateway.auth import API_PREFIX, InternalAuthMiddleware
 from vdreamer.gateway.backend import GatewayBackend
 from vdreamer.gateway.errors import install_error_handlers
@@ -53,7 +59,8 @@ def create_app(
         summary=f"LangGraph agents served over REST/SSE — protocol {PROTOCOL_VERSION}.",
         description=(
             "The vdreamer REST/SSE contract (PRD §2.5). Authenticate with the internal "
-            "bearer token plus X-User-Id / X-User-Roles (D13). Every error response is "
+            "bearer token plus X-User-Id / X-User-Roles (D13); upstream services use a "
+            "service token on /agents/{name}/trigger (A16). Every error response is "
             "{error: {code, message, details?}}. Events stream as SSE; their JSON "
             f"Schema is at {API_PREFIX}/protocol/schema.json."
         ),
@@ -67,9 +74,12 @@ def create_app(
     app.state.settings = settings
 
     install_error_handlers(app)
-    app.add_middleware(InternalAuthMiddleware, tokens=settings.tokens)
+    app.add_middleware(
+        InternalAuthMiddleware, tokens=settings.tokens, service_tokens=settings.service_tokens
+    )
 
     app.include_router(routes_runs.router)
+    app.include_router(routes_trigger.router)
     app.include_router(routes_interrupts.router)
     app.include_router(routes_artifacts.router)
     app.include_router(routes_ops.router)
