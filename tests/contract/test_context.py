@@ -338,3 +338,11 @@ def test_require_approval_outside_a_node_raises() -> None:
     # it raises RuntimeError — the gate is only callable from inside a node.
     with pytest.raises(RuntimeError):
         require_approval("sql_review", {"sql": "SELECT 1"})
+
+
+@pytest.mark.parametrize("pct", [-1, 100.5, 250])
+def test_emit_progress_pct_is_a_percentage(pct: float) -> None:
+    from vdreamer.context import emit_progress
+
+    with pytest.raises(ValueError, match=r"percentage in \[0, 100\]"):
+        emit_progress("step", pct)

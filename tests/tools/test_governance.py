@@ -204,6 +204,31 @@ async def test_invalid_args_messages_never_echo_the_values() -> None:
     assert "s3cret-value" not in run.one("tool.result")["error"]["message"]
 
 
+async def test_error_messages_mask_secrets_the_exception_echoes() -> None:
+    def login(user: str, token: str) -> str:
+        """Log in."""
+        raise RuntimeError(f"login failed for {user} with {token}; db password=hunter2")
+
+    run = await drive(_contained_agent(login, {"user": "ana", "token": "tok-123456"}))
+    result = run.one("tool.result")
+    for text in (result["error"]["message"], result["summary"]):
+        assert "tok-123456" not in text and "hunter2" not in text
+        assert "login failed for ana with ***" in text and "password=***" in text
+    (message,) = tool_messages(run.result)
+    assert "hunter2" not in message.text and "tok-123456" not in message.text
+
+
+def test_redact_text() -> None:
+    from vdreamer import redact_text
+
+    assert redact_text("password=hunter2, ok") == "password=***, ok"
+    assert redact_text("Authorization: Bearer abc.def") == "Authorization: Bearer ***"
+    assert redact_text('api_key="a b c" done') == "api_key=*** done"
+    assert redact_text("echo s3cret!", {"pin": "s3cret"}, ["pin"]) == "echo ***!"
+    assert redact_text("the tokenizer = fine") == "the tokenizer = fine"
+    assert redact_text("short ab", {"secret": "ab"}) == "short ab"  # too short to search
+
+
 async def test_fail_run_fails_the_run() -> None:
     def boom(x: int) -> str:
         """Raise."""

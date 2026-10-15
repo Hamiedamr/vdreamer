@@ -113,6 +113,100 @@ def test_dev_input_smoke_runs_the_whole_lifecycle(capsys, tmp_path) -> None:
     assert "WARNING" not in captured.err, "a fresh checkout lands on SQLite with zero warning"
 
 
+def test_dev_input_prints_the_events(capsys, tmp_path) -> None:
+    from vdreamer.entrypoints import run_dev
+
+    assert run_dev(agent="pinger:agent", db=str(tmp_path / "dev.db"),
+                   input_json='{"message": "ping"}') == 0
+    out = capsys.readouterr().out
+    assert "[run running]" in out and "pong: ping" in out and "[run completed]" in out
+
+
+def test_dev_input_is_checked_against_the_input_schema(capsys, tmp_path) -> None:
+    # The gateway answers 422 invalid_input; dev says why before running anything.
+    from vdreamer.entrypoints import run_dev
+
+    assert run_dev(agent="pinger:agent", db=str(tmp_path / "dev.db"),
+                   input_json='{"message": 7}') == 1
+    captured = capsys.readouterr()
+    assert "does not match the input_schema of agent 'pinger'" in captured.err
+    assert "message:" in captured.err
+    assert "queued" not in captured.out
+
+
+BOOMER = """
+from typing import TypedDict
+
+from langgraph.graph import END, START, StateGraph
+
+from vdreamer import BaseAgent, Mode
+
+
+class S(TypedDict, total=False):
+    messages: list
+
+
+def boom(state):
+    raise ValueError("node blew up")
+
+
+class Boomer(BaseAgent):
+    name = "boomer"
+    mode = Mode.CHAT
+
+    def build(self, ctx):
+        graph = StateGraph(S)
+        graph.add_node("boom", boom)
+        graph.add_edge(START, "boom")
+        graph.add_edge("boom", END)
+        return graph
+
+
+agent = Boomer()
+"""
+
+SCHEMALESS = """
+from vdreamer import BaseAgent, Mode
+
+
+class Schemaless(BaseAgent):
+    name = "schemaless"
+    mode = Mode.HEADLESS
+
+    def build(self, ctx):
+        raise AssertionError("never built")
+
+
+agent = Schemaless()
+"""
+
+
+def test_dev_input_reports_why_a_run_failed(capsys, tmp_path, monkeypatch) -> None:
+    from vdreamer.entrypoints import run_dev
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "boomer.py").write_text(BOOMER, encoding="utf-8")
+    assert run_dev(agent="boomer:agent", db=str(tmp_path / "dev.db"),
+                   input_json='{"messages": []}') == 1
+    captured = capsys.readouterr()
+    assert "-> failed" in captured.out
+    assert "node_error: node blew up" in captured.err
+
+
+def test_entrypoints_refuse_an_agent_validate_rejects(capsys, tmp_path, monkeypatch) -> None:
+    from vdreamer.entrypoints import run_dev, run_worker
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "schemaless.py").write_text(SCHEMALESS, encoding="utf-8")
+    assert run_dev(agent="schemaless:agent", db=str(tmp_path / "dev.db"),
+                   input_json="{}") == 1
+    err = capsys.readouterr().err
+    assert "fails the contract" in err and "input_schema: required for HEADLESS/BOTH" in err
+    assert "vdreamer validate" in err
+    assert run_worker(agent="schemaless:agent") == 1
+    assert "fails the contract" in capsys.readouterr().err
+
+
 def test_dev_persists_the_run_checkpoint_to_the_sqlite_file(tmp_path) -> None:
     # D11's point: run state survives a dev restart. `dev --input` checkpoints
     # the run to the SQLite file; a fresh saver re-opened on the same file

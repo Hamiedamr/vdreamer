@@ -56,7 +56,7 @@ Fold the events into one state per thread view:
 
 `conformance/README.md` defines the per-event rules. They are short, and two are easy to get wrong:
 
-- `message.completed` is authoritative and may arrive *before* the last `token.delta`s of that message. After it, ignore that message's deltas.
+- `message.completed` is authoritative. vdreamer flushes a message's pending deltas before its `message.completed`, but a client must still not rely on that: after it, ignore that message's deltas.
 - Things are identified by id, not by arrival. When a run resumes after an interrupt, the paused node runs again from the top and re-emits its `message.completed` / `tool.call` with the **same ids**. Upsert.
 
 Prove it: replay every `conformance/*.json` recording (only the `sse` steps, honoring `reset`) and compare with its `expected_state`. Exact equality is expected for the fields listed. A client may keep more.

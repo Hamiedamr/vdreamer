@@ -9,7 +9,7 @@
       "path": "/api/v1/runs/run_1/events",
       "last_event_id": null,
       "dropped": true,
-      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.requested\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"kind\":\"generic\",\"actions\":[\"respond\"],\"payload\":{\"value\":\"which region for backup?\"}}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"status\":\"awaiting_approval\",\"attempt\":1}}\n\n"
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.requested\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"kind\":\"generic\",\"actions\":[\"respond\"],\"payload\":{\"value\":\"which region for backup?\"}}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":3,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"status\":\"awaiting_approval\",\"attempt\":1}}\n\n"
     },
     {
       "kind": "resolve",
@@ -26,7 +26,7 @@
       "path": "/api/v1/runs/run_1/events",
       "last_event_id": "run_1:3",
       "dropped": false,
-      "body": "id: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.resolved\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":4,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"action\":\"respond\",\"resolved_by\":\"alice\"}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":5,\"ts\":\"2026-01-01T00:00:03Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":2}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":6,\"ts\":\"2026-01-01T00:00:04Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":2}}\n\n"
+      "body": "id: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.resolved\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":4,\"ts\":\"2026-01-01T00:00:03Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"action\":\"respond\",\"resolved_by\":\"alice\"}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":5,\"ts\":\"2026-01-01T00:00:04Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":2}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"ask\",\"seq\":6,\"ts\":\"2026-01-01T00:00:05Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":2}}\n\n"
     }
   ],
   "expected_state": {

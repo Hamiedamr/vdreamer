@@ -13,7 +13,10 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from vdreamer import __version__
 from vdreamer.events import PROTOCOL_VERSION
@@ -35,6 +38,16 @@ from vdreamer.vendored import STATIC_DIR
 Lifespan = Callable[[], AbstractAsyncContextManager[None]]
 
 OPENAPI_URL = f"{API_PREFIX}/openapi.json"
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    """``/static`` with ``Cache-Control: no-cache``: browsers revalidate by ETag (a
+    cheap 304) instead of heuristically reusing a copy from an older vdreamer."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
 
 def create_app(
@@ -83,5 +96,11 @@ def create_app(
     app.include_router(routes_interrupts.router)
     app.include_router(routes_artifacts.router)
     app.include_router(routes_ops.router)
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> RedirectResponse:
+        """The bare origin (what a browser opens first) leads to the API docs."""
+        return RedirectResponse(f"{API_PREFIX}/docs")
+
     return app

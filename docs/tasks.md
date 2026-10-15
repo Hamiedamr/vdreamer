@@ -476,6 +476,28 @@ Also fixed while driving the examples: `vdreamer run --thread` with a `--message
 
 ---
 
+## First-contact review (post-P0)
+
+A new-developer pass over the README, `vdreamer dev`/`run`, the REST/SSE surface and Swagger, plus the LangChain/LangGraph docs examples served by vdreamer (`examples/playground`, driven offline by `tests/acceptance/test_playground.py` and live against Ollama `gemma4:31b-cloud`). What it found and what changed:
+
+- [x] **A docs-style tool node showed every tool call twice.** The LangGraph quickstart calls `tool.invoke(tool_call["args"])`, so the governed proxy had no id and minted one; the model's own call then surfaced too when its `ToolMessage` landed. A bare-args call now leaves the id to `governed_call`, which flags it `id_assigned`; the stream mapper binds such a call to the oldest held model call in the same namespace with the same name and matching (or masked) args, so the client sees one `tool.call`/`tool.result` under the model's id. Both drivers, golden test `test_golden_bare_args_governed_call_is_one_call`.
+- [x] **Deltas trailed their `message.completed`.** A fast model finishes inside the 50 ms batch window, so its whole text arrived after completion. The mapper now flushes a message's open batches right before its `message.completed` (golden sequences and the conformance kit re-recorded; `protocol.md` still tells clients to ignore later deltas).
+- [x] **Secrets in tool error messages.** Redaction covered arguments only, so `RuntimeError("password=hunter2")` reached the model, the event log and the client. `tools.redact_text` (public) masks `key=value`/`key: value` pairs for the redaction keys and any masked argument value echoed verbatim; governance applies it to contained errors (A33).
+- [x] **`vdreamer dev --input` said only `-> failed (9 events)`.** It now validates the input against `input_schema` first (the gateway's `422`), prints every event as `vdreamer run` would, and prints the final error.
+- [x] **`dev`/`worker`/`serve` ran agents `validate` rejects** (e.g. a `HEADLESS` agent with no `input_schema`). `validate.static_checks` (the checks that need no `build()`) now gate every entrypoint and `export-schema`.
+- [x] **`vdreamer run --message` against a typed agent** sent `{"messages": …}`, which the gateway's schema silently dropped. The client now sends the text to the schema's single string field (or asks for `--field`/`--input`).
+- [x] **`emit_progress` scale.** Undocumented; `0.2` rendered as `0%`. It is a percentage (PRD §3.3 row, docstring), out-of-range values raise, and the client prints `:g`.
+- [x] **The smoke agent showed nothing in `vdreamer run`** (its reply was a state key). `pinger` also returns an `AIMessage`; the README now says what reaches clients.
+- [x] **Swagger UI in a dark browser was unreadable** (checked in the desktop app's browser pane): the shell left the canvas transparent, so Swagger's light-theme text (`#3b4151`) sat on a dark page under a white auth bar. `docs.html` declares `color-scheme: light dark` with explicit backgrounds, and `swagger-init.js` toggles Swagger's own vendored `.dark-mode` theme from `prefers-color-scheme` (live on change). `/static` responses now send `Cache-Control: no-cache` (ETag revalidation), since a heuristically cached `swagger-init.js` survived a restart; and `GET /` redirects to `/api/v1/docs` instead of a 404. Authorize → Try it out → `GET /agents` verified in the pane.
+- [x] **`vdreamer dev`'s default `./.vdreamer/` state was not gitignored**, so the quickstart dirtied the tree; `.vdreamer/` is now ignored.
+- [x] **Docs:** a README "Your first agent" section (`ctx.tools.govern`, what clients see, `--message` mapping, `msg.text` under `output_version="v1"`, the 16-character token), and a clearer short-token error.
+
+Exit: `uv run pytest` — 978 passed, 28 skipped (including `tests/acceptance/test_playground.py`, 7 tests); ruff + mypy (strict) clean; the playground's model-backed agents also run live against Ollama `gemma4:31b-cloud`.
+
+Not changed, by design: `output_version="v1"` (§2.4) — the playground reads `msg.text`; Ollama `-cloud` models ignoring `format` (an Ollama limitation — the router uses `method="function_calling"`).
+
+---
+
 ## Post-P0 (P1: tracked, not scheduled)
 
 Per §7.1:

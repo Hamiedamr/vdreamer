@@ -226,7 +226,10 @@ class Printer:
         if str(p["message_id"]) in self.completed:
             return
         if self.thinking_open != p["message_id"]:
-            self._line(self.style.dim("[thinking]"))
+            if self.open_line:
+                self.out.write("\n")
+            # Same shape as a completed message's thinking: "[thinking] text".
+            self._inline(self.style.dim("[thinking] "))
             self.thinking_open = str(p["message_id"])
         self._inline(self.style.dim(str(p["text"])))
 
@@ -297,7 +300,8 @@ class Printer:
         self._line(self.style.dim(f"[interrupt resolved: {p.get('action')} by {who}]"))
 
     def _progress(self, p: Mapping[str, Any]) -> None:
-        pct = f" {p['pct']:.0f}%" if isinstance(p.get("pct"), (int, float)) else ""
+        # pct is 0–100; ``:g`` keeps a fraction visible (0.2 → "0.2%", not "0%").
+        pct = f" {p['pct']:g}%" if isinstance(p.get("pct"), (int, float)) else ""
         self._line(self.style.dim(f"[progress] {p.get('label')}{pct}"))
 
     def _log(self, p: Mapping[str, Any]) -> None:
@@ -541,6 +545,32 @@ def _input_from_text(text: str, field_name: str | None) -> Any:
     return {"messages": [{"role": "user", "content": text}]}
 
 
+def _text_field(agent: Mapping[str, Any], field_name: str | None) -> str | None:
+    """Where typed text goes for this agent: ``--field``, else its schema's one text field.
+
+    An agent without an ``input_schema``, or whose schema has ``messages``, takes
+    the messages shape (``None``). A schema with exactly one string property
+    takes the text there; any other schema needs ``--field`` or ``--input`` —
+    the gateway would silently drop a ``messages`` key the schema does not have.
+    """
+    if field_name:
+        return field_name
+    schema = agent.get("input_schema")
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    if not isinstance(properties, Mapping) or "messages" in properties:
+        return None
+    text_fields = [
+        name for name, spec in properties.items()
+        if isinstance(spec, Mapping) and spec.get("type") == "string"
+    ]
+    if len(text_fields) == 1:
+        return str(text_fields[0])
+    raise ClientError(
+        f"agent {agent.get('name')!r} takes {sorted(properties)} (its input_schema), not "
+        "messages: pass --input JSON, or --field NAME to send the text as {NAME: text}"
+    )
+
+
 def run_terminal(
     options: RunOptions,
     *,
@@ -574,12 +604,16 @@ def run_terminal(
             print(f"run: no agent {options.agent!r} at {options.url}", file=sys.stderr)
             return 1
         headless = service or options.trigger or agent.get("mode") == "headless"
+        resolved_agent: Mapping[str, Any] = agent
+
+        def text_input(text: str) -> Any:
+            return _input_from_text(text, _text_field(resolved_agent, options.field_name))
 
         def first_input() -> Any:
             if options.input_json is not None:
                 return json.loads(options.input_json)
             if options.message is not None:
-                return _input_from_text(options.message, options.field_name)
+                return text_input(options.message)
             return None
 
         if options.inbox:
@@ -631,7 +665,7 @@ def run_terminal(
                     break
                 if not text.strip():
                     break
-                run_input = _input_from_text(text, options.field_name)
+                run_input = text_input(text)
             run_id = session.start_chat(thread_id, run_input)
             status = session.follow(run_id)
             run_input = None

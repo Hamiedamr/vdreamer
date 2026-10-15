@@ -68,7 +68,13 @@ from vdreamer.context import (
     emit_record,
     require_approval,
 )
-from vdreamer.tools import VDREAMER_METADATA_KEY, Policy, redact_args, resolve_policy
+from vdreamer.tools import (
+    VDREAMER_METADATA_KEY,
+    Policy,
+    redact_args,
+    redact_text,
+    resolve_policy,
+)
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
@@ -429,6 +435,10 @@ class GovernedCall:
     args: Mapping[str, Any]
     policy: Policy
     source: str
+    #: True when the caller passed bare args (``tool.invoke(tool_call["args"])``),
+    #: so the id is ours, not the model's: the stream mapper may then bind this
+    #: call to the model's matching tool call (one ``tool.call``, the model's id).
+    id_assigned: bool = False
 
 
 def governed_call(
@@ -447,6 +457,7 @@ def governed_call(
         args=model_args(tool, args if isinstance(args, Mapping) else {}),
         policy=policy,
         source=source if source is not None else tool_source(tool),
+        id_assigned=not tool_call.get("id"),
     )
 
 
@@ -505,15 +516,16 @@ class _Pipeline:
     def before(self) -> VDreamerContext | None:
         call = self.call
         redacted = redact_args(call.args, call.policy.redact)
-        _emit(
-            {
-                "type": "tool.call",
-                "tool_call_id": call.tool_call_id,
-                "name": call.name,
-                "source": call.source,
-                "args": redacted,
-            }
-        )
+        record: dict[str, Any] = {
+            "type": "tool.call",
+            "tool_call_id": call.tool_call_id,
+            "name": call.name,
+            "source": call.source,
+            "args": redacted,
+        }
+        if call.id_assigned:
+            record["id_assigned"] = True
+        _emit(record)
         denial = authorize(call.policy, self.ctx.roles if self.ctx is not None else ())
         if denial is not None:
             raise _Contained("denied", denial)
@@ -561,8 +573,11 @@ class _Pipeline:
         call = self.call
         metrics.TOOL_LATENCY.labels(source=call.source).observe(time.monotonic() - self.started)
         metrics.TOOL_ERRORS.labels(source=call.source, code=failure.code).inc()
+        # Exceptions echo what they were given: mask the call's secrets in the
+        # message (A33) before the model, the event log or the client see it.
+        message = redact_text(failure.message, call.args, call.policy.redact)
         reply = failure.reply or ToolMessage(
-            content=f"Error ({failure.code}): {failure.message}",
+            content=f"Error ({failure.code}): {message}",
             name=call.name,
             tool_call_id=call.tool_call_id,
             status="error",
@@ -572,14 +587,16 @@ class _Pipeline:
                 "type": "tool.result",
                 "tool_call_id": call.tool_call_id,
                 "status": "error",
-                "error": {"code": failure.code, "message": failure.message},
-                "summary": reply.text[:SUMMARY_MAX_CHARS],
+                "error": {"code": failure.code, "message": message},
+                "summary": redact_text(reply.text, call.args, call.policy.redact)[
+                    :SUMMARY_MAX_CHARS
+                ],
                 "artifact_ids": [],
                 "duration_ms": self._duration_ms(),
             }
         )
         if call.policy.fail_run:
-            raise GovernedToolError(failure.code, failure.message, tool=call.name) from failure
+            raise GovernedToolError(failure.code, message, tool=call.name) from failure
         return reply
 
 
@@ -675,7 +692,8 @@ def _as_tool_call(input: Any) -> tuple[dict[str, Any], bool]:
     if isinstance(input, Mapping) and input.get("type") == "tool_call":
         return dict(input), True
     args = dict(input) if isinstance(input, Mapping) else {"input": input}
-    synthetic = {"type": "tool_call", "name": None, "args": args, "id": f"call_{uuid.uuid4().hex}"}
+    # No id: ``governed_call`` mints one and flags it ``id_assigned``.
+    synthetic = {"type": "tool_call", "name": None, "args": args, "id": None}
     return synthetic, False
 
 

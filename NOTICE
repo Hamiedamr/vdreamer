@@ -1,0 +1,14 @@
+vdreamer
+Copyright 2026 Abdelhamied
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product bundles third-party software, served offline by the gateway:
+
+- Swagger UI (swagger-ui-dist 5.33.1), Copyright SmartBear Software,
+  licensed under the Apache License, Version 2.0.
+  See src/vdreamer/gateway/static/vendor/swagger-ui/LICENSE.
+
+- plotly.js 4.1.1, Copyright (c) 2016-2026 Plotly Technologies Inc.,
+  licensed under the MIT License.
+  See src/vdreamer/gateway/static/vendor/plotly/LICENSE.

@@ -3,6 +3,7 @@ name = "vdreamer-example-site-validation"
 version = "0.1.0"
 description = "UC2 reference agent: headless telecom site & antenna validation (vdreamer PRD §7.3)."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 # Plain pip works: `pip install ./examples/uc2_site_validation` (vdreamer from your index/wheelhouse).
 dependencies = [

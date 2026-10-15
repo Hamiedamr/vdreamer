@@ -114,6 +114,8 @@ _LOG_FALLBACK_MAX_CHARS: Final[int] = 500
 #: ``tool.result`` summaries are capped (§2.7 step 5 uses 8,000 for governed
 #: results; the M2 ungoverned mapping applies the same cap to ToolMessages).
 _TOOL_SUMMARY_MAX_CHARS: Final[int] = 8000
+#: What ``tools.redact_args`` puts in place of a masked value.
+_REDACTED_VALUE: Final = "***"
 
 
 def stream_driver_from_env(
@@ -210,6 +212,11 @@ class DeltaBatcher:
     def flush_all(self) -> list[tuple[tuple[str, str], str]]:
         """Drain every open batch (stream end)."""
         return [(key, self._flush(key)) for key in list(self._batches)]
+
+    def flush_message(self, message_id: str) -> list[tuple[tuple[str, str], str]]:
+        """Drain one message's open batches (thinking first), ahead of its completion."""
+        keys = [("thinking", message_id), ("token", message_id)]
+        return [(key, self._flush(key)) for key in keys if key in self._batches]
 
     def _flush(self, key: tuple[str, str]) -> str:
         batch = self._batches.pop(key)
@@ -530,6 +537,8 @@ class _RunMapper:
         self._held_calls: dict[str, tuple[tuple[str, ...], Mapping[str, Any]]] = {}
         #: Call ids a governance pipeline emitted for (never mapped again).
         self._governed: set[str] = set()
+        #: Governance-assigned id → the model's id it was bound to.
+        self._bound_ids: dict[str, str] = {}
 
     def envelope(
         self, type_: EventType, payload: Mapping[str, Any], ns: Sequence[str] = ()
@@ -779,6 +788,11 @@ class _RunMapper:
     ) -> list[EventEnvelope]:
         """A governance record → its ``tool.call`` / ``tool.result`` (§2.7 steps 2/7)."""
         call_id = str(data.get("tool_call_id") or "")
+        if data.get("type") == "tool.call" and data.get("id_assigned"):
+            bound = self._bind_held_call(ns, data)
+            if bound is not None:
+                self._bound_ids[call_id] = bound
+        call_id = self._bound_ids.get(call_id, call_id)
         self._governed.add(call_id)
         self._held_calls.pop(call_id, None)  # the governed call replaces the fallback
         if data.get("type") == "tool.call":
@@ -813,6 +827,33 @@ class _RunMapper:
             duration_ms=duration if isinstance(duration, int) else 0,
         ).event_payload()
         return [self.envelope(EventType.TOOL_RESULT, result_payload, ns)]
+
+    def _bind_held_call(self, ns: Sequence[str], data: Mapping[str, Any]) -> str | None:
+        """The held model tool call a bare-args governed call executes, if one matches.
+
+        Node code that runs ``tool.invoke(tool_call["args"])`` (the LangGraph
+        quickstart's tool node) hands governance no id, so the pipeline mints
+        one. Without binding, the client would see the call twice: once under
+        that id and once under the model's (when its ToolMessage lands). The
+        match is the oldest held call in the same namespace with the same name
+        whose every argument the governed record carries — equal, or masked.
+        """
+        name = data.get("name")
+        args = data.get("args")
+        governed_args = args if isinstance(args, Mapping) else {}
+        for held_id, (held_ns, tool_call) in self._held_calls.items():
+            if tuple(held_ns) != tuple(ns) or tool_call.get("name") != name:
+                continue
+            held_args = tool_call.get("args")
+            if not isinstance(held_args, Mapping):
+                continue
+            if all(
+                key in governed_args
+                and (governed_args[key] == value or governed_args[key] == _REDACTED_VALUE)
+                for key, value in held_args.items()
+            ):
+                return held_id
+        return None
 
     def _release_call(self, call_id: str) -> list[EventEnvelope]:
         """Emit a held ungoverned ``tool.call`` (default redaction)."""
@@ -859,6 +900,15 @@ class _RunMapper:
         usage = getattr(message, "usage_metadata", None)
         usage_payload = dict(usage) if usage else None
         thinking = "".join(self._thinking.get(message_id, [])) or None
+        # The message's last deltas go out before its completion, so a client
+        # sees text stream in and then complete — never deltas trailing it.
+        for (kind, _), text in self._batcher.flush_message(message_id):
+            type_ = EventType.TOKEN_DELTA if kind == "token" else EventType.THINKING_DELTA
+            out.append(  # root ns, as ``pump``/``finish`` flush batches
+                self.envelope(
+                    type_, TokenDeltaPayload(message_id=message_id, text=text).event_payload()
+                )
+            )
         out.append(
             self.envelope(
                 EventType.MESSAGE_COMPLETED,

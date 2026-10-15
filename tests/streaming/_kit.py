@@ -133,6 +133,60 @@ class ToolAgent(BaseTestAgent):
         return graph
 
 
+class BareArgsToolAgent(BaseTestAgent):
+    """The LangGraph quickstart's tool node: a governed tool run with bare args.
+
+    ``tool.invoke(tool_call["args"])`` hands governance no id, so it mints one;
+    the stream must still show one call, under the model's id.
+    """
+
+    name = "bare-args"
+
+    def build(self, ctx: BuildContext) -> Any:
+        from vdreamer.tools import tool as vdreamer_tool
+
+        @vdreamer_tool(redact=["secret"])
+        def lookup(city: str, secret: str = "") -> str:
+            """Look a city up."""
+            return f"{city}: 10M"
+
+        (governed,) = ctx.tools.govern([lookup])
+
+        def call(state: ChatState) -> dict[str, Any]:
+            return {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "lookup",
+                                "args": {"city": "Cairo", "secret": "hunter2"},
+                                "id": "call_model_1",
+                            }
+                        ],
+                        id="m_call",
+                    )
+                ]
+            }
+
+        def tool_node(state: ChatState) -> dict[str, Any]:
+            tool_call = state["messages"][-1].tool_calls[0]
+            observation = governed.invoke(tool_call["args"])
+            return {
+                "messages": [
+                    ToolMessage(content=observation, tool_call_id=tool_call["id"], id="tm_bare")
+                ]
+            }
+
+        graph = StateGraph(ChatState)
+        graph.add_node("call", call)
+        graph.add_node("tool", tool_node)
+        graph.add_edge(START, "call")
+        graph.add_edge("call", "tool")
+        graph.add_edge("tool", END)
+        return graph
+
+
 class ApprovalAgent(BaseTestAgent):
     """Streams one message, then pauses on ``require_approval``."""
 

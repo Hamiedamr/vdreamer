@@ -25,3 +25,6 @@ htmlcov/
 # Editor / OS artifacts
 docs/.PRD.md.un~
 .DS_Store
+
+# vdreamer dev state (the default --db, ./.vdreamer/dev.db, and its objects)
+.vdreamer/

@@ -1,0 +1,9 @@
+# Production: any OpenAI-compatible vLLM server. The key is an env reference (A23).
+aliases:
+  chat:
+    provider: vllm
+    base_url: http://10.20.0.5:8000/v1
+    model: qwen3-32b
+    api_key_env: VLLM_KEY
+    thinking: reasoning_content
+    temperature: 0

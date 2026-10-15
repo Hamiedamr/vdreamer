@@ -3,10 +3,33 @@ name = "vdreamer"
 version = "0.1.0"
 description = "Serve LangGraph BaseAgent subclasses as a production REST/SSE API — zero generated server code, air-gap ready."
 readme = "README.md"
+license = "Apache-2.0"
+# The vendored Swagger UI (Apache-2.0) and plotly.js (MIT) keep their own licenses,
+# shipped next to them under vdreamer/gateway/static/vendor/ and listed in NOTICE.
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Abdelhamied", email = "abdelhamied.amr@outlook.com" },
 ]
 requires-python = ">=3.11"
+keywords = ["langgraph", "langchain", "agents", "llm", "sse", "fastapi", "air-gapped"]
+# No `License ::` classifier: PEP 639 replaces it with the `license` expression above.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    # Only what CI runs (.python-version, every job): add versions with their CI job.
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
 # A41: supported range is langchain 1.4+ and langgraph 1.2+ within 1.x; a 2.0 of
 # either dependency requires a vdreamer major version.
 dependencies = [
@@ -63,12 +86,13 @@ sql = [
 # The reference agents (PRD §7.3, Milestone 12) are workspace members: each depends on
 # vdreamer through the workspace source, so they consume exactly this tree's public API.
 [tool.uv.workspace]
-members = ["examples/uc1_sql_analyst", "examples/uc2_site_validation", "examples/uc3_pdf_research"]
+members = ["examples/uc1_sql_analyst", "examples/uc2_site_validation", "examples/uc3_pdf_research", "examples/playground"]
 
 [tool.uv.sources]
 vdreamer-example-sql-analyst = { workspace = true }
 vdreamer-example-site-validation = { workspace = true }
 vdreamer-example-pdf-research = { workspace = true }
+vdreamer-example-playground = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -76,6 +100,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vdreamer"]
+
+[tool.hatch.build.targets.sdist]
+# Local agent/editor config never ships.
+exclude = [".claude/", ".agents/", ".opencode"]
 
 [dependency-groups]
 dev = [
@@ -91,6 +119,7 @@ dev = [
     "vdreamer-example-sql-analyst",
     "vdreamer-example-site-validation",
     "vdreamer-example-pdf-research",
+    "vdreamer-example-playground",
 ]
 # Golden-event harness deps land with Milestone 2 (A31/A43), when the harness exists.
 

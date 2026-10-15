@@ -218,7 +218,14 @@ def emit_record(record: dict[str, Any]) -> None:
 
 
 def emit_progress(label: str, pct: float | None = None) -> None:
-    """Emit a ``progress`` record (PRD §3.3): ``{label, pct?}``."""
+    """Emit a ``progress`` record (PRD §3.3): ``{label, pct?}``.
+
+    ``pct`` is a percentage, ``0``–``100`` (``emit_progress("parsing", 40)``),
+    not a ``0``–``1`` fraction; clients render it as-is. Out of range is a
+    ``ValueError``.
+    """
+    if pct is not None and not 0 <= pct <= 100:
+        raise ValueError(f"emit_progress pct is a percentage in [0, 100], got {pct!r}")
     record = {"type": "progress", "label": label, "pct": pct}
     emit_record(record)
 

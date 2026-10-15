@@ -3,6 +3,7 @@ name = "vdreamer-example-sql-analyst"
 version = "0.1.0"
 description = "UC1 reference agent: SQL & data analysis over a Neo4j semantic layer (vdreamer PRD §7.3)."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 # Plain pip works: `pip install ./examples/uc1_sql_analyst` (vdreamer from your index/wheelhouse).
 dependencies = [

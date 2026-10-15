@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import fnmatch
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -198,6 +199,49 @@ def redact_args(args: Mapping[str, Any], keys: Iterable[str] | None = None) -> d
     if keys is not None:
         masked |= {key.lower() for key in keys}
     return cast("dict[str, Any]", _redact_value(dict(args), frozenset(masked)))
+
+
+def _masked_values(value: Any, masked: frozenset[str], out: set[str]) -> None:
+    """Collect the string values ``_redact_value`` would mask, at any depth."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and key.lower() in masked:
+                if isinstance(item, str) and len(item) >= _MIN_SECRET_CHARS:
+                    out.add(item)
+            else:
+                _masked_values(item, masked, out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _masked_values(item, masked, out)
+
+
+#: Shorter masked values are not searched for in text (``"a"`` would shred it).
+_MIN_SECRET_CHARS: Final = 4
+
+
+def redact_text(
+    text: str, args: Mapping[str, Any] | None = None, keys: Iterable[str] | None = None
+) -> str:
+    """Mask secrets inside free text — an error message, a summary (A33).
+
+    The same keys as :func:`redact_args` apply twice: a ``key=value`` /
+    ``key: value`` pair naming one of them has its value masked, and the
+    values ``redact_args`` would mask in ``args`` are masked wherever they
+    appear verbatim (an exception that echoes its argument).
+    """
+    masked = {key.lower() for key in DEFAULT_REDACT_KEYS}
+    if keys is not None:
+        masked |= {key.lower() for key in keys}
+    secrets: set[str] = set()
+    if args is not None:
+        _masked_values(dict(args), frozenset(masked), secrets)
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, _REDACTED)
+    names = "|".join(re.escape(key) for key in sorted(masked, key=len, reverse=True))
+    pattern = re.compile(
+        rf"""(?i)\b({names})(\s*[=:]\s*(?:(?:bearer|basic)\s+)?)("[^"]*"|'[^']*'|[^\s,;)\]}}]+)"""
+    )
+    return pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}{_REDACTED}", text)
 
 
 def resolve_policy(

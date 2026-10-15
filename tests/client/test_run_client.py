@@ -290,3 +290,30 @@ def test_another_protocol_major_is_refused() -> None:
 def test_sse_parsing() -> None:
     lines = [": hb", "id: r:1", "data: {\"a\":", "data: 1}", "", "data: {\"b\":2}"]
     assert list(sse_events(iter(lines))) == [("r:1", {"a": 1}), (None, {"b": 2})]
+
+
+def _schema(**properties: Any) -> dict[str, Any]:
+    return {"name": "typed", "input_schema": {"type": "object", "properties": properties}}
+
+
+def test_message_text_goes_where_the_agent_takes_it() -> None:
+    from vdreamer.client import ClientError, _text_field
+
+    assert _text_field({"name": "chat", "input_schema": None}, None) is None  # messages
+    assert _text_field(_schema(messages={"type": "array"}), None) is None
+    # A schema with one text field takes the text there, not a dropped `messages` key.
+    assert _text_field(_schema(message={"type": "string"}), None) == "message"
+    assert _text_field(_schema(topic={"type": "string"}, n={"type": "integer"}), None) == "topic"
+    assert _text_field(_schema(a={"type": "string"}), "b") == "b"  # --field wins
+    with pytest.raises(ClientError, match="--field NAME"):
+        _text_field(_schema(a={"type": "string"}, b={"type": "string"}), None)
+
+
+def test_progress_shows_the_percentage_as_sent() -> None:
+    from vdreamer.client import Printer, Style
+
+    out = io.StringIO()
+    printer = Printer(out, Style(False))
+    for pct in (40.0, 0.2):
+        printer.event({"type": "progress", "payload": {"label": "step", "pct": pct}})
+    assert out.getvalue().splitlines() == ["[progress] step 40%", "[progress] step 0.2%"]

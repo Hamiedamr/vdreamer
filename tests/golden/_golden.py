@@ -37,10 +37,9 @@ from vdreamer.streaming import _LOG_FALLBACK_MAX_CHARS, _TOOL_SUMMARY_MAX_CHARS
 #: its entry. Terminal ``run.status`` payloads distinguish
 #: completed/awaiting_approval/failed — the type sequence alone cannot.
 GOLDEN_SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
-    # ChattyAgent: custom records stream while the node runs; the delta batcher
-    # flushes once at stream end — after the node's updates part delivered
-    # ``message.completed``, before the terminal ``run.status`` (fake models
-    # finish inside the 50 ms batch window).
+    # ChattyAgent: custom records stream while the node runs; the message's
+    # open delta batch (fake models finish inside the 50 ms window) flushes
+    # right before its ``message.completed`` — never trailing it.
     "chat_custom": (
         "run.status",
         "progress",
@@ -48,8 +47,8 @@ GOLDEN_SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
         "artifact.created",
         "citation",
         "log",
-        "message.completed",
         "token.delta",
+        "message.completed",
         "run.status",
     ),
     # ToolAgent: the AIMessage carrying the tool call also completes as an
@@ -68,8 +67,8 @@ GOLDEN_SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
     # interrupts; the run ends awaiting_approval (never completed).
     "approval_gate": (
         "run.status",
-        "message.completed",
         "token.delta",
+        "message.completed",
         "interrupt.requested",
         "run.status",
     ),
@@ -86,11 +85,12 @@ GOLDEN_SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
         "run.status",
     ),
     # ThinkingAgent with expose_thinking=True: reasoning_content routes as
-    # thinking (D18/A20 chain) — delta flushed at stream end like token deltas.
+    # thinking (D18/A20 chain) — its delta flushed before the completion, like
+    # token deltas.
     "thinking_exposed": (
         "run.status",
-        "message.completed",
         "thinking.delta",
+        "message.completed",
         "run.status",
     ),
     # The same graph with expose_thinking=False: no thinking.delta and no

@@ -25,8 +25,8 @@ async def test_golden_chat_with_custom_records() -> None:
     """ChattyAgent: the §2.4 "Both" mapping, all four custom record kinds.
 
     Golden order: ``run.status(running) → progress → log → artifact.created →
-    citation → log(untyped fallback) → message.completed → token.delta (the
-    stream-end batch flush) → run.status(completed)``.
+    citation → log(untyped fallback) → token.delta (the message's open batch,
+    flushed ahead of its completion) → message.completed → run.status(completed)``.
     """
     agent = _kit.ChattyAgent()
     runs = await _golden.golden_runs(agent)
@@ -134,6 +134,27 @@ async def test_golden_tool_roundtrip_and_redaction() -> None:
         call = _golden.single(events, "tool.call")
         assert call.payload["args"] == {"user": "ops", "password": "***"}
         _golden.no_leak(events, "s3cret")
+
+
+async def test_golden_bare_args_governed_call_is_one_call() -> None:
+    """A governed tool run with bare args binds to the model's call: one
+    ``tool.call``/``tool.result`` pair, under the model's id, redacted."""
+    runs = await _golden.golden_runs(_kit.BareArgsToolAgent())
+    for driver in ("v2", "v3"):
+        events = runs[driver].events
+        assert _golden.type_sequence(events) == [
+            "run.status",
+            "message.completed",
+            "tool.call",
+            "tool.result",
+            "run.status",
+        ]
+        call = next(e for e in events if e.type.value == "tool.call")
+        result = next(e for e in events if e.type.value == "tool.result")
+        assert call.payload["tool_call_id"] == "call_model_1"
+        assert call.payload["args"] == {"city": "Cairo", "secret": "***"}
+        assert result.payload["tool_call_id"] == "call_model_1"
+        assert result.payload["status"] == "ok"
 
 
 async def test_golden_approval_gate_pauses_before_completion() -> None:

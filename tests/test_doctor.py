@@ -61,3 +61,17 @@ def test_doctor_offline_passes(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert "doctor: PASS" in out
     assert "zero outbound socket calls" in out
+
+
+def test_doctor_passes_without_libpq(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A plain `pip install vdreamer` has psycopg without libpq unless the [postgres]
+    # extra is installed: only serve/worker need it, so doctor notes it and passes.
+    import sys
+
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", None)
+    assert run_offline() == 0
+    out = capsys.readouterr().out
+    assert "[--] postgres: unavailable" in out and "vdreamer[postgres]" in out
+    assert "doctor: PASS" in out

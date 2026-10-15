@@ -427,21 +427,15 @@ def _check_agent_kwargs() -> Check:
     return Check("agent_kwargs", True, ", ".join(sorted(_AGENT_KWARGS_KEYS)))
 
 
-def validate_agent(
-    agent: BaseAgent,
-    *,
-    mcp: MCPRegistry | None = None,
-    models: Mapping[str, Any] | None = None,
-    resources: Mapping[str, Any] | None = None,
-) -> list[Check]:
-    """Run the developer-contract checks (Milestones 0, 1, 5) against one agent.
+def static_checks(agent: BaseAgent) -> list[Check]:
+    """The contract checks that need no ``build()`` — declarations and policies.
 
-    ``models`` / ``resources`` are what ``build()`` sees as ``ctx.models`` /
-    ``ctx.resources``; the alias checks themselves are :func:`check_aliases`.
+    :func:`validate_agent` reports these alongside the graph checks; the
+    process entrypoints (``dev``/``worker``/``serve``) run them at boot and
+    refuse an agent that fails any, so nothing serves what ``validate`` rejects.
     """
     name = getattr(agent, "name", "")
-    graph_check, compiled, checkpointer_check = _check_graph(agent, mcp, models, resources)
-    checks = [
+    return [
         Check(
             "name",
             isinstance(name, str) and bool(_NAME_RE.fullmatch(name)),
@@ -461,12 +455,28 @@ def validate_agent(
             isinstance(agent.expose_thinking, bool),
             repr(agent.expose_thinking),
         ),
-        graph_check,
         _check_policy_mapping("tool_policies", agent.tool_policies, Policy),
         _check_policy_mapping("interrupt_policies", agent.interrupt_policies, InterruptPolicy),
         _check_durability(agent),
-        _check_agent_kwargs(),
     ]
+
+
+def validate_agent(
+    agent: BaseAgent,
+    *,
+    mcp: MCPRegistry | None = None,
+    models: Mapping[str, Any] | None = None,
+    resources: Mapping[str, Any] | None = None,
+) -> list[Check]:
+    """Run the developer-contract checks (Milestones 0, 1, 5) against one agent.
+
+    ``models`` / ``resources`` are what ``build()`` sees as ``ctx.models`` /
+    ``ctx.resources``; the alias checks themselves are :func:`check_aliases`.
+    """
+    graph_check, compiled, checkpointer_check = _check_graph(agent, mcp, models, resources)
+    static = static_checks(agent)
+    # validate's report order: the declarations, the graph, then the policies.
+    checks = [*static[:7], graph_check, *static[7:], _check_agent_kwargs()]
     if checkpointer_check is not None:
         checks.append(checkpointer_check)
     if compiled is not None:

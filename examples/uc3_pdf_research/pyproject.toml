@@ -3,6 +3,7 @@ name = "vdreamer-example-pdf-research"
 version = "0.1.0"
 description = "UC3 reference agents: multi-PDF research & comparison, EN + AR (vdreamer PRD §7.3)."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 # Plain pip works: `pip install ./examples/uc3_pdf_research` (vdreamer from your index/wheelhouse).
 # pypdf runs inside the sandbox, which uses the worker's interpreter: install it in the worker venv.

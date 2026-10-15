@@ -90,7 +90,9 @@ class GatewaySettings:
         for token in self.tokens:
             if len(token) < MIN_TOKEN_LENGTH:
                 raise GatewayConfigError(
-                    f"internal tokens must be at least {MIN_TOKEN_LENGTH} characters"
+                    f"internal tokens must be at least {MIN_TOKEN_LENGTH} characters — set "
+                    "VDREAMER_INTERNAL_TOKEN (and VDREAMER_INTERNAL_TOKEN_PREVIOUS) to a longer "
+                    "secret, e.g. `python -c \"import secrets; print(secrets.token_urlsafe(24))\"`"
                 )
         names = [name for name, _ in self.service_tokens]
         if len(set(names)) != len(names):

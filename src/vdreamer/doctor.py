@@ -218,11 +218,21 @@ def run_offline(models: str | None = None, resources: str | None = None) -> int:
     guard = EgressGuard()
     guard.install()
     problems: list[str] = []
+    postgres_note: str | None = None
     try:
         import langchain  # noqa: F401 — imported under the guard on purpose
         import langgraph  # noqa: F401
-        import langgraph.checkpoint.postgres  # noqa: F401
         import uvicorn  # noqa: F401
+
+        try:
+            import langgraph.checkpoint.postgres  # noqa: F401
+        except ImportError as exc:
+            # psycopg needs libpq: the [postgres] extra ships it (psycopg[binary]),
+            # else the host's. Only serve/worker need it; dev runs on SQLite (D11).
+            postgres_note = (
+                f"postgres: unavailable ({type(exc).__name__}: {str(exc).splitlines()[0]}); "
+                "serve/worker need `vdreamer[postgres]` or a system libpq, dev does not"
+            )
 
         import vdreamer.gateway  # noqa: F401 — FastAPI app factory + routes
         import vdreamer.governance  # noqa: F401 — the governed tool pipeline (M5)
@@ -265,6 +275,9 @@ def run_offline(models: str | None = None, resources: str | None = None) -> int:
         print(f"[FAIL] egress: {len(guard.violations)} blocked socket call(s)")
     else:
         print("[ok] egress: zero outbound socket calls during the probe")
+
+    if postgres_note is not None:
+        print(f"[--] {postgres_note}")
 
     tiktoken_problem = tiktoken_cache_problem()
     if tiktoken_problem is None:

@@ -205,7 +205,7 @@ pdfkit: {type: mcp, command: /opt/mcp/pdfkit/bin/server, args: ["--stdio"], env:
 | `artifact.created` | §3.4 |
 | `citation` | `{citation_id, message_id, source: {artifact_id?, uri?, title}, locator: {page?, …}, snippet (≤300 chars), score?}` |
 | `interrupt.requested` / `interrupt.resolved` | §4 |
-| `progress` | `{label, pct?}` |
+| `progress` | `{label, pct?}`; `pct` is a percentage, 0–100 |
 | `log` | `{level, message}` |
 
 - **Heartbeat** every 15 s; `X-Accel-Buffering: no` (A22). **Deltas** batched at emission (50 ms / 32 tokens); post-run compaction may drop deltas superseded by `message.completed` (A4).

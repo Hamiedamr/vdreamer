@@ -120,6 +120,7 @@ from vdreamer.tools import (
     Policy,
     VDreamerToolMiddleware,
     redact_args,
+    redact_text,
     resolve_policy,
     tool,
 )
@@ -232,6 +233,7 @@ __all__ = [
     "make_stream_driver",
     "open_checkpointer",
     "redact_args",
+    "redact_text",
     "require_approval",
     "resolve_agent",
     "resolve_policy",

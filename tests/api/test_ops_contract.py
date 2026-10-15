@@ -197,6 +197,23 @@ def test_docs_render_from_vendored_assets_only(client: TestClient) -> None:
     assert "<script>" not in html  # every script is a same-origin file
 
 
+def test_docs_follow_the_viewers_color_scheme(client: TestClient) -> None:
+    # A dark browser must not show Swagger's light-theme text on a dark canvas.
+    html = client.get("/api/v1/docs").text
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert "html.dark-mode" in html
+    init = client.get("/static/vdreamer/swagger-init.js")
+    assert "prefers-color-scheme: dark" in init.text and '"dark-mode"' in init.text
+    # Revalidated, never reused stale across a vdreamer upgrade.
+    assert init.headers["cache-control"] == "no-cache" and init.headers.get("etag")
+
+
+def test_the_bare_origin_redirects_to_the_docs(client: TestClient) -> None:
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/api/v1/docs"
+
+
 def test_fastapi_cdn_docs_are_disabled(client: TestClient) -> None:
     for path in ("/docs", "/redoc", "/docs/oauth2-redirect", "/openapi.json"):
         assert client.get(path).status_code == 404

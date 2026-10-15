@@ -1,0 +1,9 @@
+# Registry (D2): `vdreamer dev --registry vdreamer.yaml --agent calculator`
+agents:
+  hello: playground.hello:agent
+  broken: playground.broken:agent
+  calculator: playground.calculator:graph_agent
+  calculator-functional: playground.calculator:functional_agent
+  joke-chain: playground.workflows:chain_agent
+  router: playground.workflows:router_agent
+  hitl-tools: playground.hitl_tools:agent

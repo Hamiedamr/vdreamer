@@ -23,6 +23,7 @@ resolution-markers = [
 members = [
     "vdreamer",
     "vdreamer-example-pdf-research",
+    "vdreamer-example-playground",
     "vdreamer-example-site-validation",
     "vdreamer-example-sql-analyst",
 ]
@@ -4762,6 +4763,7 @@ dev = [
     { name = "types-jsonschema" },
     { name = "types-pyyaml" },
     { name = "vdreamer-example-pdf-research" },
+    { name = "vdreamer-example-playground" },
     { name = "vdreamer-example-site-validation" },
     { name = "vdreamer-example-sql-analyst" },
 ]
@@ -4810,6 +4812,7 @@ dev = [
     { name = "types-jsonschema", specifier = ">=4.26.0.20261006" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260906" },
     { name = "vdreamer-example-pdf-research", editable = "examples/uc3_pdf_research" },
+    { name = "vdreamer-example-playground", editable = "examples/playground" },
     { name = "vdreamer-example-site-validation", editable = "examples/uc2_site_validation" },
     { name = "vdreamer-example-sql-analyst", editable = "examples/uc1_sql_analyst" },
 ]
@@ -4828,6 +4831,17 @@ requires-dist = [
     { name = "pypdf", specifier = ">=5" },
     { name = "vdreamer", extras = ["qdrant", "fastembed", "sandbox"], editable = "." },
 ]
+
+[[package]]
+name = "vdreamer-example-playground"
+version = "0.1.0"
+source = { editable = "examples/playground" }
+dependencies = [
+    { name = "vdreamer", extra = ["sandbox"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vdreamer", extras = ["sandbox"], editable = "." }]
 
 [[package]]
 name = "vdreamer-example-site-validation"

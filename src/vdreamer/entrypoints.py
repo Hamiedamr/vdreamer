@@ -97,6 +97,7 @@ from vdreamer.eventlog import (
     PostgresEventLog,
     PostgresEventStore,
 )
+from vdreamer.events import EventType
 from vdreamer.interrupts import (
     InterruptSweeper,
     PostgresAdvisoryLeader,
@@ -143,14 +144,39 @@ def _resolve_cli_agent(
     registry: str | None,
     agents_dir: str | None,
 ) -> BaseAgent | None:
-    """Resolve ``--agent`` for a process entrypoint; ``None`` (message printed) on failure."""
+    """Resolve ``--agent`` for a process entrypoint; ``None`` (message printed) on failure.
+
+    An agent that fails the static contract checks is refused here, so a
+    process never serves what ``vdreamer validate`` rejects.
+    """
     try:
-        return resolve_agent(spec, registry=registry, agents_dir=agents_dir)
+        agent = resolve_agent(spec, registry=registry, agents_dir=agents_dir)
     except AgentLoadError as exc:  # RegistryError subclasses AgentLoadError
         print(f"{command}: {exc}", file=sys.stderr)
+        return None
     except Exception as exc:  # agent code raised while importing; surface it, don't crash
         print(f"{command}: cannot load {spec!r}: {type(exc).__name__}: {exc}", file=sys.stderr)
-    return None
+        return None
+    problem = contract_error(agent)
+    if problem is not None:
+        print(f"{command}: {problem}", file=sys.stderr)
+        return None
+    return agent
+
+
+def contract_error(agent: BaseAgent) -> str | None:
+    """Why ``agent`` fails the static contract checks, or ``None`` when it passes."""
+    from vdreamer.validate import static_checks
+
+    failed = [check for check in static_checks(agent) if not check.ok]
+    if not failed:
+        return None
+    detail = "; ".join(f"{check.name}: {check.detail}" for check in failed)
+    label = getattr(agent, "name", "") or type(agent).__name__
+    return (
+        f"agent {label!r} fails the contract ({detail}); "
+        "run `vdreamer validate` for the full report"
+    )
 
 
 def _logger(command: str) -> Callable[[str], None]:
@@ -651,6 +677,12 @@ async def _dev_main(
         except json.JSONDecodeError as exc:
             print(f"dev: --input is not valid JSON: {exc}", file=sys.stderr)
             return 1
+        problem = input_problem(agent, payload)
+        if problem is not None:  # the gateway's 422 invalid_input, before anything runs
+            print(f"dev: {problem}", file=sys.stderr)
+            return 1
+        if agent.input_schema is not None:
+            payload = agent.input_schema.model_validate(payload).model_dump(mode="json")
         record = await queue.enqueue(
             agent.name, payload, thread_id=thread_id, run_id=None
         )
@@ -658,12 +690,55 @@ async def _dev_main(
         await worker.run_once()
         final = await queue.get(record.id)
         assert final is not None  # enqueue created it; nothing removes rows
-        events = len(sinks[record.id].events)
+        events = sinks[record.id].events
+        _print_events(events)
         print(
             f"vdreamer dev: run {record.id} -> {final.status.value} "
-            f"(attempt {final.attempt}, {events} events)"
+            f"(attempt {final.attempt}, {len(events)} events)"
         )
+        reason = _failure_reason(events)
+        if final.status is not RunState.COMPLETED and reason:
+            print(f"vdreamer dev: {reason}", file=sys.stderr)
         return 0 if final.status is RunState.COMPLETED else 1
+
+
+def input_problem(agent: BaseAgent, payload: Any) -> str | None:
+    """Why ``payload`` fails ``agent.input_schema`` (as the gateway's ``422``), or ``None``."""
+    import pydantic
+
+    schema = agent.input_schema
+    if schema is None:
+        return None
+    try:
+        schema.model_validate(payload)
+    except pydantic.ValidationError as exc:
+        errors = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or '(root)'}: {error['msg']}"
+            for error in exc.errors(include_url=False)
+        )
+        return f"--input does not match the input_schema of agent {agent.name!r}: {errors}"
+    return None
+
+
+def _print_events(events: Sequence[Any]) -> None:
+    """Render the run's events as ``vdreamer run`` would (plain, no color)."""
+    from vdreamer.client import Printer, Style
+
+    printer = Printer(sys.stdout, Style(False))
+    for envelope in events:
+        printer.event(envelope.model_dump(mode="json"))
+
+
+def _failure_reason(events: Sequence[Any]) -> str | None:
+    """The final ``run.status`` error, ``code: message``, if the run ended with one."""
+    for envelope in reversed(events):
+        if envelope.type is not EventType.RUN_STATUS:
+            continue
+        error = envelope.payload.get("error")
+        if isinstance(error, dict):
+            return f"{error.get('code')}: {error.get('message')}"
+        return None
+    return None
 
 
 def run_dev(
@@ -791,6 +866,9 @@ def resolve_serve_agents(
         raise ServeAgentsError("serve needs --agent, --registry, or --agents-dir (D2)")
     agents: dict[str, BaseAgent] = {}
     for agent in loaded:
+        problem = contract_error(agent)
+        if problem is not None:
+            raise ServeAgentsError(problem)
         existing = agents.get(agent.name)
         if existing is not None and existing is not agent:
             raise ServeAgentsError(f"two agents are named {agent.name!r}")

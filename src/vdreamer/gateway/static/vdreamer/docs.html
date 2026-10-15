@@ -3,9 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>vdreamer API docs</title>
   <link rel="icon" type="image/png" href="/static/vendor/swagger-ui/favicon-32x32.png">
   <link rel="stylesheet" href="/static/vendor/swagger-ui/swagger-ui.css">
+  <!-- Swagger UI's colors assume a light page; give the canvas an explicit color in
+       both schemes (swagger-init.js turns on Swagger's own .dark-mode theme). -->
+  <style>
+    html, body { margin: 0; background: #fff; }
+    html.dark-mode, html.dark-mode body { background: #1c2022; }
+  </style>
 </head>
 <body>
   <!-- Swagger UI from vendored assets only (PRD §5.2, A13): no CDN, no external origin. -->

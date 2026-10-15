@@ -7,9 +7,11 @@ UC1–UC3 (PRD §7.3) land with Milestone 12; each example becomes a uv
 workspace member then.
 """
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
 from vdreamer import BaseAgent, BuildContext, Mode
@@ -22,14 +24,18 @@ class PingerInput(BaseModel):
 
 
 class PingerState(TypedDict):
-    """Graph state: one node."""
+    """Graph state: one node. ``messages`` carries the reply to clients."""
 
     message: str
     reply: str
+    messages: NotRequired[Annotated[list[AnyMessage], add_messages]]
 
 
 def _reply(state: PingerState) -> dict[str, Any]:
-    return {"reply": f"pong: {state['message']}"}
+    # State keys are the agent's own; only messages (and artifacts, logs,
+    # progress) reach a client, so the reply is also an assistant message.
+    reply = f"pong: {state['message']}"
+    return {"reply": reply, "messages": [AIMessage(reply)]}
 
 
 class PingerAgent(BaseAgent):

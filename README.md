@@ -37,7 +37,27 @@ To try the gateway locally with no infrastructure, run `vdreamer dev` without `-
 PYTHONPATH=examples/smoke uv run vdreamer dev --agent pinger:agent --port 8000
 ```
 
-Then talk to it from another terminal with the same token: `uv run vdreamer run <agent> --message "hi"`. It streams the run, prompts inline for approvals, and `--thread <id>` reattaches.
+Then talk to it from another terminal with the same token: `uv run vdreamer run <agent> --message "hi"`. It streams the run, prompts inline for approvals, and `--thread <id>` reattaches. The token is any string of **16 or more characters** (`export VDREAMER_INTERNAL_TOKEN=dev-token-0123456789`); `dev`, `serve` and `run` all read it.
+
+## Your first agent
+
+`examples/playground/` is the place to start: a zero-config `hello` agent (fake streaming model, governed tool, table artifact, approval), a `broken` agent showing every contained failure, and the LangGraph quickstart, workflow and human-in-the-loop examples from the LangChain docs, served unchanged except for where the model comes from. Its README lists what changed from the docs and why.
+
+```
+cd examples/playground
+uv run vdreamer dev --registry vdreamer.yaml --agent hello      # Swagger UI at /api/v1/docs
+uv run vdreamer run hello --message "hi"                        # second terminal
+uv run vdreamer dev --registry vdreamer.yaml --agent broken --input '{"message": "go"}'   # one-shot: prints every event
+```
+
+The ten names most agents need, all from `import vdreamer`: `BaseAgent`, `BuildContext`, `Mode`, `tool`, `emit_progress`, `emit_log`, `emit_artifact`/`aemit_artifact` with `ArtifactKind`, `require_approval`, `FileRef`. Things that are easy to miss:
+
+- **Govern your tools** with `ctx.tools.govern([...])` (a `StateGraph`) or `**ctx.agent_kwargs()` (`create_agent`, which adds the governance middleware). Only governed calls emit `tool.call`/`tool.result`, with redaction, timeouts and contained errors.
+- **What clients see** is messages (`AIMessage`s in the graph, streamed as `token.delta` → `message.completed`), artifacts, progress, logs, tool events and interrupts. Plain state keys are not sent — return an `AIMessage` for anything a user should read.
+- **Input:** `vdreamer run --message` sends `{"messages": [{"role": "user", "content": ...}]}`, or `{field: text}` when the agent's `input_schema` has exactly one string field (`--field` picks one, `--input` sends raw JSON). `HEADLESS`/`BOTH` agents must declare an `input_schema`; `dev`, `worker` and `serve` refuse an agent that `vdreamer validate` rejects.
+- **Model output:** aliases are built with `output_version="v1"` (§2.4), so `msg.content` is a list of content blocks. Read `msg.text` for the string.
+- **`emit_progress(label, pct)`** takes a percentage, 0–100.
+- **One-shot runs:** `vdreamer dev --input JSON` validates the input like the gateway, prints every event, and says why a run failed.
 
 Agent tools are governed (redaction, timeouts, error containment, oversized results stored as artifacts). MCP servers are declared in a `resources.yaml` passed with `--resources` (or `$VDREAMER_RESOURCES`), for example `netinv: {type: mcp, url: https://mcp.netinv.internal/mcp, bearer_env: NETINV_TOKEN}`; agents select their tools with `ctx.tools.mcp("netinv")`. Agents emit artifacts with `emit_artifact(name, ArtifactKind.TABLE, rows)` (or `return Artifact(...)` from a tool); table artifacts need the `[sandbox]` extra (pyarrow). Under `vdreamer dev`, objects live next to the `.db` file: artifact bytes in `artifacts/`, inbound files (what a `FileRef` names) in `inputs/`, and `safe_extract` output in `extracted/`. `serve`/`worker` keep them in MinIO (`VDREAMER_MINIO_ENDPOINT`, `VDREAMER_MINIO_ACCESS_KEY`, `VDREAMER_MINIO_SECRET_KEY`, optional `VDREAMER_MINIO_BUCKET`/`VDREAMER_MINIO_SECURE`; `vdreamer migrate` creates the bucket and its 30-day lifecycle rule). `ctx.sandbox.run(code)` is POSIX-only; set `VDREAMER_SANDBOX_UID` (worker running as root) for a dedicated sandbox uid.
 
@@ -65,6 +85,10 @@ For `validate pinger:agent`, make `examples/smoke/` importable first: bash `PYTH
 - `src/vdreamer/` — the package: `cli`, `agents` (`BaseAgent` contract), `context` (run context + helpers), `runtime` (`AgentRunner`), `tools` (policies + `@vdreamer.tool`), `discovery`, `persistence`, `validate`, `doctor`; `events`/`streaming`/`eventlog` (protocol + drivers + event log); `queue`/`worker`/`entrypoints`/`migrate` (runs and processes); `gateway/` (the FastAPI REST/SSE app and its vendored static assets: Swagger UI, plotly.js), `threads`, `interrupts`, `metrics`, `protocol_schema`, `vendored`; `governance`/`mcp`/`resources` (tools); `artifacts`/`artifact_data`/`objects`/`tables`/`files`/`sandbox` (artifacts, files, sandbox); `models`/`adapters`/`backends`/`network` (models and resources).
 - `tests/` — pytest suite per area: `contract/` (M1), `golden/` + `streaming/` + `protocol/` (M2), `queue/` + `worker/` (M3), `api/` (M4), `tools/` (M5), `artifacts/` (M6), `models/` (M7), plus CLI, validate, doctor.
 - `examples/smoke/` — `pinger.py`, the Milestone-0 smoke agent the CI matrix runs.
+- `examples/playground/` — first-contact agents and LangChain/LangGraph docs examples served by vdreamer (start here); `tests/acceptance/test_playground.py` drives them all.
 - `examples/uc1_sql_analyst/`, `examples/uc2_site_validation/`, `examples/uc3_pdf_research/` — the UC1–UC3 reference agents (§7.3): SQL analysis with a reviewed query and a four-eyes write path; headless telecom site validation (ZIP → VLM → MCP → approved verdict → callback); and multi-document research with hybrid retrieval and citations, in English and Arabic. Each is a uv workspace member with a plain `pyproject.toml`, and each has its own README.
 - `docs/` — `PRD.md` (the spec), `tasks.md` (the milestone plan).
 - Root: `AGENTS.md`, `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`.
+## License
+
+Apache License 2.0 — see `LICENSE`. vdreamer bundles Swagger UI (Apache-2.0) and plotly.js (MIT) for offline use; `NOTICE` lists them, and each keeps its own license file under `src/vdreamer/gateway/static/vendor/`.
