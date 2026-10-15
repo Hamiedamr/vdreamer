@@ -1,0 +1,19 @@
+# Only pyproject.toml, uv.lock, README.md and src/ reach the build (see Dockerfile).
+.git
+.github
+.venv
+.venv-pip
+.agents
+.opencode
+.claude
+.mypy_cache
+.ruff_cache
+.pytest_cache
+**/__pycache__
+dist
+build
+docs
+examples
+tests
+vdreamer-bundle
+vdreamer-schema

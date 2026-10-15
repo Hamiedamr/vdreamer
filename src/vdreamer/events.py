@@ -218,15 +218,13 @@ class InterruptResolvedPayload(_Payload):
 
 
 class ArtifactCreatedPayload(_Payload):
-    """``artifact.created``: PRD §3.4 line 234.
+    """``artifact.created`` (PRD §3.4).
 
     ``{artifact_id, question_id, session_id, kind, renderer?, name, mime_type,
     size_bytes?, preview, view_url, download_url, metadata}``. ``question_id``
     is the ``run_id`` and ``session_id`` the ``thread_id`` (§3.1). ``preview``
     is the SSE preview block per kind (§3.4 table); ``view_url`` /
-    ``download_url`` are the gateway artifact routes (§2.5). Until Milestones
-    4/6 wire byte storage and the gateway, ``preview``/``view_url``/
-    ``download_url`` are plain ``dict``/``str`` placeholders.
+    ``download_url`` are the gateway artifact routes (§2.5).
     """
 
     artifact_id: str

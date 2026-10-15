@@ -28,6 +28,12 @@ every ``resources.yaml`` entry (``--resources`` or ``$VDREAMER_RESOURCES``):
 each resource connects and passes its probe, each MCP server starts (a
 ``required`` one that does not is a failure). ``langchain_openai``,
 ``langchain_ollama`` and fastembed join the guarded imports.
+
+Milestone 10 moves the forced variables to :mod:`vdreamer.offline` (every
+command applies them now, not only ``doctor``; the list grew the telemetry
+switches) and reports the tiktoken cache: a ``TIKTOKEN_CACHE_DIR`` that is
+set but missing or empty fails; unset (with tiktoken installed) is a warning,
+since only token counting would reach for it.
 """
 
 from __future__ import annotations
@@ -40,15 +46,12 @@ from importlib import metadata as importlib_metadata
 from typing import Any, cast
 
 from vdreamer import __version__
-
-#: Forced before importing the stack (PRD §5.2): LangSmith tracing off,
-#: HuggingFace/Transformers offline.
-OFFLINE_ENV: dict[str, str] = {
-    "LANGSMITH_TRACING": "false",
-    "HF_HUB_OFFLINE": "1",
-    "TRANSFORMERS_OFFLINE": "1",
-    "FASTMCP_CHECK_FOR_UPDATES": "off",
-}
+from vdreamer.offline import (
+    OFFLINE_ENV,
+    TIKTOKEN_CACHE_ENV,
+    apply_offline_env,
+    tiktoken_cache_problem,
+)
 
 #: Reported in the version block (PRD §2.3: LangChain/LangGraph versions).
 VERSION_PACKAGES: tuple[str, ...] = (
@@ -207,8 +210,7 @@ async def _probe_backends(models: str | None, resources: str | None) -> list[str
 
 def run_offline(models: str | None = None, resources: str | None = None) -> int:
     """CLI entry point for ``doctor --offline``. 0 = healthy and zero egress."""
-    for key, value in OFFLINE_ENV.items():
-        os.environ[key] = value
+    apply_offline_env()
 
     print("vdreamer doctor --offline")
     _report_versions()
@@ -263,6 +265,15 @@ def run_offline(models: str | None = None, resources: str | None = None) -> int:
         print(f"[FAIL] egress: {len(guard.violations)} blocked socket call(s)")
     else:
         print("[ok] egress: zero outbound socket calls during the probe")
+
+    tiktoken_problem = tiktoken_cache_problem()
+    if tiktoken_problem is None:
+        cache = os.environ.get(TIKTOKEN_CACHE_ENV) or "tiktoken not installed"
+        print(f"[ok] tiktoken cache: {cache}")
+    elif os.environ.get(TIKTOKEN_CACHE_ENV, "").strip():
+        problems.append(f"tiktoken cache: {tiktoken_problem}")
+    else:
+        print(f"[--] tiktoken cache: {tiktoken_problem}")
 
     from vdreamer.vendored import VENDORED_ASSETS, check_vendored_assets
 

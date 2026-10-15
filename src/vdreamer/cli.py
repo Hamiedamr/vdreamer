@@ -13,6 +13,10 @@ idempotent schema application, DSN from ``VDREAMER_PG_DSN``, A23). Milestone
 ``--models`` (models.yaml) next to ``--resources`` on ``validate``,
 ``doctor``, ``worker`` and ``dev``. ``run`` lands with Milestone 11, and
 ``export-schema``/``bundle`` with Milestone 10.
+
+Milestone 10 also applies the zero-egress environment (:mod:`vdreamer.offline`)
+before every command but ``bundle`` — the one that downloads, on a connected
+host — and adds ``dev --reload`` (:mod:`vdreamer.reload`).
 """
 
 from __future__ import annotations
@@ -88,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument(
         "--offline",
         action="store_true",
-        help="force offline env vars and assert zero egress (required in Milestone 0)",
+        help="force the offline env vars and assert zero egress (the only mode; kept explicit "
+        "for CI)",
     )
     _add_config_flags(doctor_parser)
 
@@ -211,8 +216,8 @@ def build_parser() -> argparse.ArgumentParser:
             "file (D11), surviving restarts. With --input, enqueue and drive exactly one run and "
             "report the outcome (a smoke of the whole lifecycle); without it, serve the "
             "REST/SSE gateway and run the worker loop until Ctrl-C. The token comes from "
-            "VDREAMER_INTERNAL_TOKEN, or a one-off token is printed. Hot reload is future "
-            "work."
+            "VDREAMER_INTERNAL_TOKEN, or a one-off token is printed. --reload restarts the "
+            "process when the agent's sources or config change (state survives in --db)."
         ),
     )
     _add_topology_agent_flags(dev_parser)
@@ -234,8 +239,121 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="thread id for the --input run (default: none)",
     )
+    dev_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="restart when *.py / *.yaml / *.json sources change (not with --input)",
+    )
     _add_resources_flag(dev_parser)
     _add_bind_flags(dev_parser)
+
+    export_parser = subparsers.add_parser(
+        "export-schema",
+        help="write the protocol contract: OpenAPI 3.1, event JSON Schema, inputs, TS types",
+        description=(
+            "Write the client contract to --out: openapi.json (OpenAPI 3.1), "
+            "events.schema.json (the SSE envelope), agents/<name>.input.schema.json, "
+            "vdreamer.d.ts (TypeScript declarations, no npm package) and manifest.json "
+            "(versions + sha256). Agents come from --agent / --registry / --agents-dir; "
+            "with none, only the generic contract is written. Deterministic and offline."
+        ),
+    )
+    export_parser.add_argument(
+        "--agent",
+        metavar="NAME",
+        action="append",
+        default=[],
+        help="an agent whose input schema to export: a pkg.module:agent spec or a name "
+        "(repeatable)",
+    )
+    export_parser.add_argument(
+        "--registry", metavar="PATH", default=None, help="a vdreamer.yaml registry (D2)"
+    )
+    export_parser.add_argument(
+        "--agents-dir", metavar="PATH", default=None, help="a flat directory of agent modules (D2)"
+    )
+    export_parser.add_argument(
+        "--out", metavar="DIR", default="vdreamer-schema", help="output directory "
+        "(default ./vdreamer-schema)"
+    )
+
+    bundle_parser = subparsers.add_parser(
+        "bundle",
+        help="build the offline install set on a connected host (wheelhouse + hashed lock)",
+        description=(
+            "Run on a connected host with plain pip (no uv): `python -m pip download` "
+            "vdreamer (with --extra ...) and your agents' requirements (-r) into "
+            "OUT/wheelhouse, constrained by the release constraints.txt (-c), then write "
+            "a hash-pinned OUT/requirements.lock, the tiktoken encodings (OUT/tiktoken) "
+            "and, with --models, the fastembed aliases (OUT/fastembed). On the air-gapped "
+            "host: pip install --no-index --find-links wheelhouse --require-hashes "
+            "-r requirements.lock."
+        ),
+    )
+    bundle_parser.add_argument(
+        "--out", metavar="DIR", default="vdreamer-bundle", help="output directory "
+        "(default ./vdreamer-bundle)"
+    )
+    bundle_parser.add_argument(
+        "--vdreamer",
+        metavar="SPEC",
+        default=None,
+        help="the vdreamer to bundle: a requirement or a local wheel path "
+        "(default vdreamer==<this version>)",
+    )
+    bundle_parser.add_argument(
+        "--extra",
+        metavar="NAME",
+        action="append",
+        default=[],
+        help="a vdreamer extra to include: postgres, minio, fastembed, qdrant, neo4j, mcp, "
+        "sandbox, sql (repeatable)",
+    )
+    bundle_parser.add_argument(
+        "-r",
+        "--requirement",
+        metavar="FILE",
+        action="append",
+        default=[],
+        help="your agents' requirements file (repeatable)",
+    )
+    bundle_parser.add_argument(
+        "-c",
+        "--constraints",
+        metavar="FILE",
+        default=None,
+        help="the release's constraints.txt (the tested dependency set)",
+    )
+    bundle_parser.add_argument(
+        "--platform",
+        metavar="TAG",
+        action="append",
+        default=[],
+        help="target platform tag, e.g. manylinux2014_x86_64 (repeatable; binary wheels only)",
+    )
+    bundle_parser.add_argument(
+        "--python-version", metavar="X.Y", default=None, help="target Python version"
+    )
+    bundle_parser.add_argument(
+        "--implementation", metavar="IMPL", default=None, help="target implementation (cp)"
+    )
+    bundle_parser.add_argument(
+        "--abi", metavar="ABI", action="append", default=[], help="target ABI (repeatable)"
+    )
+    bundle_parser.add_argument(
+        "--index-url", metavar="URL", default=None, help="the package index to download from"
+    )
+    bundle_parser.add_argument(
+        "--models",
+        metavar="PATH",
+        default=None,
+        help="models.yaml: pre-fetch its fastembed aliases into OUT/fastembed",
+    )
+    bundle_parser.add_argument(
+        "--no-tiktoken",
+        action="store_true",
+        help="do not fetch the tiktoken encodings into OUT/tiktoken",
+    )
     return parser
 
 
@@ -243,6 +361,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point. Returns a process exit code."""
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.command == "bundle":
+        # The one command that downloads (on a connected host): no offline env.
+        from pathlib import Path
+
+        from vdreamer.bundle import BundleOptions, run_bundle
+
+        return run_bundle(
+            BundleOptions(
+                out=Path(args.out),
+                vdreamer=args.vdreamer,
+                extras=tuple(args.extra),
+                requirements=tuple(args.requirement),
+                constraints=args.constraints,
+                platforms=tuple(args.platform),
+                python_version=args.python_version,
+                implementation=args.implementation,
+                abis=tuple(args.abi),
+                index_url=args.index_url,
+                models=args.models,
+                tiktoken=not args.no_tiktoken,
+            )
+        )
+
+    # §5.2: tracing off, HF offline, no telemetry — before any command imports the stack.
+    from vdreamer.offline import apply_offline_env
+
+    apply_offline_env()
 
     if args.command == "validate":
         from vdreamer.validate import run_validate
@@ -257,8 +403,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "doctor":
-        if not args.offline:
-            parser.error("doctor requires --offline; online probes land with Milestone 10")
+        # An air-gapped product has one mode: the probes always run under the
+        # egress guard; --offline stays as the explicit (CI) spelling.
         from vdreamer.doctor import run_offline
 
         return run_offline(models=args.models, resources=args.resources)
@@ -293,6 +439,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
         )
 
+    if args.command == "dev" and args.reload:
+        if args.input is not None:
+            parser.error("dev --reload serves the gateway; it cannot be combined with --input")
+        import sys
+
+        from vdreamer.reload import run_dev_reload
+
+        return run_dev_reload(
+            list(argv) if argv is not None else sys.argv[1:],
+            db=args.db,
+            agents_dir=args.agents_dir,
+            registry=args.registry,
+            models=args.models,
+            resources=args.resources,
+        )
+
     if args.command == "dev":
         from vdreamer.entrypoints import run_dev
 
@@ -307,6 +469,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
             resources=args.resources,
             models=args.models,
+        )
+
+    if args.command == "export-schema":
+        from vdreamer.export_schema import run_export_schema
+
+        return run_export_schema(
+            agents=args.agent, registry=args.registry, agents_dir=args.agents_dir, out=args.out
         )
 
     parser.error(f"unknown command {args.command!r}")

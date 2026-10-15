@@ -4,7 +4,9 @@ A Python SDK + CLI that serves developer-written `BaseAgent` subclasses — Lang
 
 ## Status
 
-Pre-1.0 (`0.1.0`). Milestones 0–7 are **complete** (`docs/tasks.md`): the `BaseAgent` developer contract, protocol v1.0 with the v2/v3 stream drivers, the Postgres run queue with workers and crash recovery, and the FastAPI REST/SSE gateway under `/api/v1` (threads, runs, resumable SSE, the interrupt inbox and resolve endpoint, the artifact routes, internal auth, Prometheus metrics, OpenAPI 3.1, and Swagger UI from vendored assets), the governed tool pipeline + MCP, and artifacts, files and the sandbox (five artifact kinds, Parquet tables with paged previews and CSV/XLSX export, `FileRef` + `safe_extract`, `ctx.sandbox`), and models and resources (`models.yaml` vLLM/Ollama/fastembed aliases with per-alias thinking modes; `resources.yaml` qdrant/neo4j/sql adapters with read-only enforcement). Still to come, per later milestones: the rest of HITL, `/trigger` + the outbox, packaging, and the UC1–UC3 reference agents.
+Pre-1.0 (`0.1.0`). Milestones 0–10 are **complete** (`docs/tasks.md`): the `BaseAgent` developer contract; protocol v1.0 with the v2/v3 stream drivers; the run queue with workers and crash recovery; the FastAPI REST/SSE gateway under `/api/v1`; the governed tool pipeline + MCP; artifacts, files and the sandbox; models and resources; the full HITL pipeline (all four interrupt sources through one endpoint); the headless `/trigger` entry with the outbox (signed callbacks and interrupt notifications); and the air-gap packaging (`export-schema`, `bundle`, the OCI image, zero-egress runtime settings). Still to come: the conformance kit and the `vdreamer run` terminal client (M11), and the UC1–UC3 reference agents (M12).
+
+Operators: see `docs/operations.md` for the air-gapped install (`vdreamer bundle` → `pip install --no-index --require-hashes`), the image, and the environment reference.
 
 ## Development quickstart
 
@@ -23,9 +25,11 @@ uv run mypy                            # type-check (src/, strict)
 uv run vdreamer --version
 uv run vdreamer validate pinger:agent # smoke agent; needs examples/smoke on PYTHONPATH
 uv run vdreamer doctor --offline      # asserts zero egress
+uv run vdreamer export-schema --out vdreamer-schema   # OpenAPI 3.1, event schema, TS types
+uv run pytest tests/packaging         # Milestone 10: export-schema, bundle, offline env, reload
 ```
 
-To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input`: it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, keeping runs, events, threads, approvals and checkpoints in one SQLite file (`--db`, default `./.vdreamer/dev.db`), so a restart picks up where it stopped. The current testing phase runs on this mode; the Postgres topology below comes later. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
+To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input` (add `--reload` to restart on source changes): it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, keeping runs, events, threads, approvals and checkpoints in one SQLite file (`--db`, default `./.vdreamer/dev.db`), so a restart picks up where it stopped. The current testing phase runs on this mode; the Postgres topology below comes later. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
 
 ```
 PYTHONPATH=examples/smoke uv run vdreamer dev --agent pinger:agent --port 8000
@@ -41,13 +45,16 @@ For `validate pinger:agent`, make `examples/smoke/` importable first: bash `PYTH
 
 ## CI matrix
 
-`.github/workflows/ci.yml` runs five jobs on Python 3.11 with `UV_PYTHON_DOWNLOADS=never`:
+`.github/workflows/ci.yml` runs these jobs on Python 3.11 with `UV_PYTHON_DOWNLOADS=never`:
 
 - `locked` — `uv lock --check` fails on lockfile drift; `uv sync --locked --extra postgres` proves the Milestone-0 exit criterion; then ruff, mypy, and the full test suite against the committed lockfile.
 - `floor` — `uv lock --resolution lowest-direct` (regenerated locally, never committed): smoke tests against the minimum supported pins (A41: langchain 1.4.0, langgraph 1.2.11).
 - `latest` — `uv lock --upgrade` (regenerated locally, never committed): smoke tests against the latest 1.x minor, so new minors are tracked, never silently absorbed.
 - `uv-independence` (plain-pip install) — `uv build` a wheel, install it into a clean `python -m venv` with plain `pip`, then run the CLI and validate a sample agent: proves vdreamer never requires uv at runtime.
 - `zero-egress` — `uv run --frozen --offline vdreamer doctor --offline` asserts zero egress via an in-process socket guard (PRD §5.2).
+- `airgap` — the Milestone-10 exit: `uv build` + `uv export` (hash-pinned `constraints.txt`), `vdreamer bundle` with plain pip, then a `--network none` container with no uv installs the bundle with `pip --no-index --require-hashes`, passes `doctor --offline` and runs the reference agent.
+- `image` — builds the multi-stage `Dockerfile`, then runs `doctor --offline` and a smoke run in the image with the network off.
+- `release` — on `v*` tags: attaches the wheel, sdist, `constraints.txt` and the `export-schema` output to the GitHub release.
 
 ## Repository layout
 

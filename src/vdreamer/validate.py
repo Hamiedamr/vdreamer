@@ -30,6 +30,13 @@ be in the cache, a resource must connect and pass its probe — and
 variables are still checked). ``build()`` receives the real chat models and
 fastembed objects (located, not loaded) and an unconnected placeholder per
 resource.
+
+Milestone 10 adds **vdreamer checkpointer used** (§2.3, §2.4): ``build()``
+runs with a stand-in checkpointer and store on ``ctx``; a ``StateGraph`` is
+compiled by vdreamer, and anything ``build()`` compiled itself (a compiled
+graph, ``create_agent``, an ``@entrypoint``) must have been given exactly
+``ctx.checkpointer`` (``**ctx.agent_kwargs()``) — none, or its own saver,
+would lose crash recovery (A6) and resume.
 """
 
 from __future__ import annotations
@@ -75,7 +82,7 @@ class Check:
     detail: str = ""
 
 
-def ensure_compiled(graph: Any, checkpointer: Any = None) -> Any:
+def ensure_compiled(graph: Any, checkpointer: Any = None, store: Any = None) -> Any:
     """Compile a ``build()`` return value where needed (PRD §2.4).
 
     ``StateGraph`` instances compile here; already-runnable graphs (compiled
@@ -84,7 +91,7 @@ def ensure_compiled(graph: Any, checkpointer: Any = None) -> Any:
     rejected — no guessing, no duck-typing beyond "can it run".
     """
     if isinstance(graph, StateGraph):
-        return graph.compile(checkpointer=checkpointer)
+        return graph.compile(checkpointer=checkpointer, store=store)
     if callable(getattr(graph, "ainvoke", None)):
         return graph
     raise TypeError(
@@ -133,13 +140,46 @@ def _build_context(
     models: Mapping[str, Any] | None = None,
     resources: Mapping[str, Any] | None = None,
 ) -> BuildContext:
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
     policies = agent.tool_policies if isinstance(agent.tool_policies, Mapping) else {}
     return BuildContext(
         tools=ToolKit(policies, mcp=mcp),
         tool_policies=policies,
         models=models if models is not None else {},
         resources=resources if resources is not None else {},
+        # Stand-ins for the worker's savers: identity is what _check_checkpointer tests.
+        checkpointer=InMemorySaver(),
+        store=InMemoryStore(),
     )
+
+
+def _check_checkpointer(graph: Any, compiled: Any, ctx: BuildContext) -> Check:
+    """vdreamer's checkpointer (and store) reach the graph (§2.4, A6)."""
+    if isinstance(graph, StateGraph):
+        return Check("checkpointer", True, "StateGraph compiled by vdreamer")
+    used = getattr(compiled, "checkpointer", None)
+    hint = "pass ctx.checkpointer — e.g. create_agent(..., **ctx.agent_kwargs())"
+    if used is None or used is False:
+        return Check(
+            "checkpointer", False, f"build() compiled the graph without a checkpointer: {hint}"
+        )
+    if used is not ctx.checkpointer:
+        return Check(
+            "checkpointer",
+            False,
+            f"build() compiled the graph with its own {type(used).__name__}: {hint}",
+        )
+    store = getattr(compiled, "store", None)
+    if store is not None and store is not ctx.store:
+        return Check(
+            "checkpointer",
+            False,
+            f"build() compiled the graph with its own {type(store).__name__} store: "
+            "pass ctx.store",
+        )
+    return Check("checkpointer", True, "ctx.checkpointer")
 
 
 def _check_graph(
@@ -147,17 +187,21 @@ def _check_graph(
     mcp: MCPRegistry | None = None,
     models: Mapping[str, Any] | None = None,
     resources: Mapping[str, Any] | None = None,
-) -> tuple[Check, Any]:
-    """``build()`` must return something vdreamer can compile or run."""
+) -> tuple[Check, Any, Check | None]:
+    """``build()`` must return something vdreamer can compile or run.
+
+    Also returns the checkpointer check (``None`` when the build failed).
+    """
+    ctx = _build_context(agent, mcp, models, resources)
     try:
-        graph = agent.build(_build_context(agent, mcp, models, resources))
-        compiled = ensure_compiled(graph)
+        graph = agent.build(ctx)
+        compiled = ensure_compiled(graph, checkpointer=ctx.checkpointer, store=ctx.store)
     except NotImplementedError:
-        return Check("graph.build", False, "build(ctx) is not implemented"), None
+        return Check("graph.build", False, "build(ctx) is not implemented"), None, None
     except Exception as exc:
-        return Check("graph.build", False, f"{type(exc).__name__}: {exc}"), None
+        return Check("graph.build", False, f"{type(exc).__name__}: {exc}"), None, None
     kind = type(compiled).__module__ + "." + type(compiled).__qualname__
-    return Check("graph.build", True, kind), compiled
+    return Check("graph.build", True, kind), compiled, _check_checkpointer(graph, compiled, ctx)
 
 
 def _references(obj: Any, target: type, depth: int = 0, seen: set[int] | None = None) -> bool:
@@ -396,7 +440,7 @@ def validate_agent(
     ``ctx.resources``; the alias checks themselves are :func:`check_aliases`.
     """
     name = getattr(agent, "name", "")
-    graph_check, compiled = _check_graph(agent, mcp, models, resources)
+    graph_check, compiled, checkpointer_check = _check_graph(agent, mcp, models, resources)
     checks = [
         Check(
             "name",
@@ -423,6 +467,8 @@ def validate_agent(
         _check_durability(agent),
         _check_agent_kwargs(),
     ]
+    if checkpointer_check is not None:
+        checks.append(checkpointer_check)
     if compiled is not None:
         checks += [_check_tools_governed(compiled), _check_approval_routes(agent, compiled)]
     return checks

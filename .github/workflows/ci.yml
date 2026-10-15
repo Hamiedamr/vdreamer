@@ -1,6 +1,6 @@
-# vdreamer CI (Milestone 0 — docs/tasks.md).
+# vdreamer CI (Milestones 0 and 10 — docs/tasks.md).
 #
-# Five jobs:
+# Jobs:
 #   locked          — the committed uv.lock is the source of truth: lint, type-check,
 #                      full test suite. Also proves `uv sync --locked --extra postgres`
 #                      works from a clean checkout (Milestone-0 exit criterion).
@@ -13,6 +13,11 @@
 #                      must never require uv at runtime.
 #   zero-egress     — `uv run --frozen --offline vdreamer doctor --offline`, which
 #                      asserts zero egress with an in-process socket guard (§5.2).
+#   airgap          — M10 exit: wheel + constraints + `vdreamer bundle` here, then a
+#                      `--network none` container installs with plain pip (no uv),
+#                      passes `doctor --offline` and runs the reference agent.
+#   image           — the multi-stage OCI image: doctor + smoke run, network off.
+#   release         — tags v*: wheel, sdist, constraints.txt, export-schema output.
 #
 # UV_PYTHON_DOWNLOADS=never: the dev toolchain never fetches interpreters
 # (§5.2); actions/setup-python provides the pinned 3.11 (.python-version).
@@ -138,3 +143,86 @@ jobs:
         run: uv sync --frozen --all-extras
       - name: Assert zero egress
         run: uv run --frozen --offline vdreamer doctor --offline
+
+  # Milestone 10 exit (docs/tasks.md): a release wheel + `vdreamer bundle` on this
+  # connected runner, then a fresh container with NO network and NO uv installs
+  # it with plain pip, passes `doctor --offline`, and runs the reference agent.
+  airgap:
+    name: air-gapped install (bundle → --network none, §5.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+      - name: Release artifacts (dev side, uv) — wheel + hash-pinned constraints.txt
+        run: |
+          uv build
+          uv export --frozen --no-dev --all-extras --no-emit-project --format requirements.txt -o constraints.txt
+      - name: Bundle on the connected host with plain pip (no uv on PATH for this step)
+        run: |
+          python -m venv .venv-bundle
+          .venv-bundle/bin/pip install dist/vdreamer-*.whl
+          env -u UV PATH="$PWD/.venv-bundle/bin:/usr/bin:/bin" \
+            vdreamer bundle --vdreamer "$(ls dist/vdreamer-*.whl)" --extra postgres \
+              -c constraints.txt --out bundle
+      - name: Install and run with egress blocked (docker --network none, no uv)
+        run: |
+          docker run --rm --network none \
+            -v "$PWD/bundle:/bundle:ro" -v "$PWD/examples/smoke:/agents:ro" \
+            python:3.11-slim sh -euxc '
+              python -m venv /opt/vdreamer
+              /opt/vdreamer/bin/pip install --no-index --find-links /bundle/wheelhouse \
+                --require-hashes -r /bundle/requirements.lock
+              ! command -v uv
+              export TIKTOKEN_CACHE_DIR=/bundle/tiktoken
+              /opt/vdreamer/bin/vdreamer doctor --offline
+              PYTHONPATH=/agents /opt/vdreamer/bin/vdreamer validate pinger:agent
+              PYTHONPATH=/agents /opt/vdreamer/bin/vdreamer dev --agent pinger:agent \
+                --input "{\"message\": \"air-gapped\"}" --db /tmp/dev.db
+            '
+
+  image:
+    name: OCI image (multi-stage, no uv at runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build vdreamer:ci
+        run: docker build -t vdreamer:ci .
+      - name: doctor --offline and a smoke run inside the image, network off
+        run: |
+          docker run --rm --network none vdreamer:ci doctor --offline
+          docker run --rm --network none --entrypoint sh vdreamer:ci -c '! command -v uv'
+          docker run --rm --network none -v "$PWD/examples/smoke:/agents:ro" \
+            -e PYTHONPATH=/agents vdreamer:ci \
+            dev --agent pinger:agent --input '{"message": "image"}' --db /tmp/dev.db
+
+  # Each release (tag v*) attaches the wheel/sdist, the hash-pinned constraints.txt
+  # (what `vdreamer bundle -c` installs against) and the export-schema output (§5.3, §6.1).
+  release:
+    name: release artifacts
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [locked, airgap, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10
+      - name: Build, export constraints and the protocol contract
+        run: |
+          uv build
+          uv export --frozen --no-dev --all-extras --no-emit-project --format requirements.txt -o dist/constraints.txt
+          uv sync --locked
+          uv run vdreamer export-schema --out dist/vdreamer-schema
+          tar -C dist -czf dist/vdreamer-schema.tar.gz vdreamer-schema
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "vdreamer $GITHUB_REF_NAME" || true
+          gh release upload "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz dist/constraints.txt --clobber

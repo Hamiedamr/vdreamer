@@ -349,35 +349,35 @@ Also verified:
 **Goal:** the complete CLI surface and the air-gap deliverables (§2.3, §5.2–§5.3). Operators use standard pip; uv appears only in the dev-side release pipeline.
 
 **CLI commands**
-- [ ] `dev` (hot reload), `serve`, `worker`, `run` (Milestone 11), `validate`, `migrate`, `export-schema`, `doctor --offline`, `bundle`.
-- [ ] `validate`: aliases resolve; headless agents declare `input_schema` and interrupt `approver_role` (A16); approval routes wired; vdreamer checkpointer used; no ungoverned tools.
-- [ ] `migrate`: vdreamer schema plus checkpointer/store setup.
-- [ ] `export-schema`: OpenAPI 3.1, event JSON Schema, input schemas, TS types.
+- [x] `dev` (hot reload), `serve`, `worker`, `run` (Milestone 11), `validate`, `migrate`, `export-schema`, `doctor --offline`, `bundle`. (`dev --reload` is a supervisor (`vdreamer.reload`): it runs `python -m vdreamer dev …` as a child and restarts it when a `*.py`/`*.yaml`/`*.json` file changes under the working directory, `PYTHONPATH`, `--agents-dir` or the config files' directories. It polls, has no new dependency and debounces a save burst; state survives in `--db` (D11). `run` lands with Milestone 11.)
+- [x] `validate`: aliases resolve; headless agents declare `input_schema` and interrupt `approver_role` (A16); approval routes wired; vdreamer checkpointer used; no ungoverned tools. (New check `checkpointer`: `build()` runs with stand-in `ctx.checkpointer`/`ctx.store`; a returned `StateGraph` is compiled by vdreamer, and anything `build()` compiled itself must carry exactly `ctx.checkpointer` (and no store of its own) — none or its own saver fails with the `**ctx.agent_kwargs()` hint. The rest landed with M5/M7/M8.)
+- [x] `migrate`: vdreamer schema plus checkpointer/store setup. (`persistence.open_store` → LangGraph's `AsyncPostgresStore.setup()`. Workers now pass the store to `build()` as `ctx.store` and compile `StateGraph`s with it; `vdreamer dev` uses `AsyncSqliteStore` on the `--db` file.)
+- [x] `export-schema`: OpenAPI 3.1, event JSON Schema, input schemas, TS types. (`vdreamer.export_schema`: `openapi.json` (the document `/api/v1/openapi.json` serves), `events.schema.json`, `agents/<name>.input.schema.json`, `vdreamer.d.ts` and `manifest.json` (versions + sha256 per file). The TS comes from `vdreamer.tsgen`, a JSON Schema → TypeScript translator with no npm involved: the `Envelope<T, P>`/`KnownEvent`/`VdreamerEvent` unions plus `Events`, `Api` and `Agents.<name>` namespaces; anything it does not understand becomes `unknown`, never `any`. Deterministic: two exports are byte-identical. Agents optional. The conformance kit joins it in M11.)
 
 **Zero-egress**
-- [ ] Runtime settings: LangSmith off; `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`; fastembed `local_files_only`; bundled `TIKTOKEN_CACHE_DIR`; vendored chart JS, no CDNs; `NETWORK_ALLOWLIST` enforced; no telemetry or update checks.
-- [ ] `doctor --offline`: probes backends, model files, MCP servers, sandbox; prints LangChain/LangGraph versions; asserts zero egress (CI with blocked network).
-- [ ] Vendored swagger-ui assets pass `doctor --offline` (alongside the vendored chart JS).
+- [x] Runtime settings: LangSmith off; `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`; fastembed `local_files_only`; bundled `TIKTOKEN_CACHE_DIR`; vendored chart JS, no CDNs; `NETWORK_ALLOWLIST` enforced; no telemetry or update checks. (`vdreamer.offline.apply_offline_env()` runs before every CLI command except `bundle` and *forces* `LANGSMITH_TRACING=false`, `LANGCHAIN_TRACING_V2=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1`, `FASTMCP_CHECK_FOR_UPDATES=off`, `DO_NOT_TRACK=1`. `bundle` fetches the tiktoken encodings, the image bakes them in, and `TIKTOKEN_CACHE_DIR` points at them. fastembed `local_files_only`, the vendored chart JS and `NETWORK_ALLOWLIST` landed with M6/M7.)
+- [x] `doctor --offline`: probes backends, model files, MCP servers, sandbox; prints LangChain/LangGraph versions; asserts zero egress (CI with blocked network). (Since M0–M7. M10 adds the tiktoken cache check: set but missing or empty fails; unset with tiktoken installed warns. Plain `doctor` now runs the same probes, since an air-gapped product has one mode.)
+- [x] Vendored swagger-ui assets pass `doctor --offline` (alongside the vendored chart JS). (Since M4/M6.)
 
 **Release pipeline (dev side, uv)**
-- [ ] `uv build` produces the vdreamer sdist and wheel.
-- [ ] `uv export --frozen --no-dev --all-extras --format requirements.txt` produces a hash-pinned `constraints.txt` that ships with each release, so operators reproduce the tested dependency set.
+- [x] `uv build` produces the vdreamer sdist and wheel. (CI `airgap` and `release` jobs.)
+- [x] `uv export --frozen --no-dev --all-extras --format requirements.txt` produces a hash-pinned `constraints.txt` that ships with each release, so operators reproduce the tested dependency set. (With `--no-emit-project`: a constraints file cannot name the project itself. The `release` job, on `v*` tags, attaches the wheel, sdist, `constraints.txt` and the `export-schema` tarball to the GitHub release.)
 
 **`vdreamer bundle` (product feature, operator-run on a connected host; no uv)**
-- [ ] Runs `python -m pip download` against the release `constraints.txt` plus the operator's agent requirements into `wheelhouse/`, emitting a hash-pinned `requirements.lock`.
-- [ ] `--models` pre-fetches the fastembed aliases into `cache_dir`.
+- [x] Runs `python -m pip download` against the release `constraints.txt` plus the operator's agent requirements into `wheelhouse/`, emitting a hash-pinned `requirements.lock`. (`vdreamer.bundle`. pip treats hashes in a `-c` file as `--require-hashes` for every requirement, which would reject unpinned agent requirements. So pip resolves against a hash-free copy of the pins, and every downloaded file of a pinned project must then match the release's version and one of its sha256s, or the bundle fails. The lock pins and hashes every file in the wheelhouse; two versions of one project is an error. `--extra`, `-r`, `--vdreamer <wheel>`, and `--platform`/`--python-version`/`--implementation`/`--abi` for cross-target bundles (binary only). Also writes `tiktoken/`, `bundle.json` and `INSTALL.txt`. It is the one command that runs without the offline environment.)
+- [x] `--models` pre-fetches the fastembed aliases into `cache_dir`. (Into `OUT/fastembed/`, then located offline with `check_fastembed_files` to prove the workers will find it; ship it as `fastembed.cache_dir`.)
 
 **Install on the air-gapped side (no uv)**
-- [ ] `python -m venv`, then `pip install --no-index --find-links ./wheelhouse --require-hashes -r requirements.lock` (matches PRD §5.3).
+- [x] `python -m venv`, then `pip install --no-index --find-links ./wheelhouse --require-hashes -r requirements.lock` (matches PRD §5.3). (`docs/operations.md`, `INSTALL.txt`, and the CI `airgap` job, which runs it in a `--network none` container.)
 
 **OCI image**
-- [ ] `vdreamer:<ver>` (gateway + worker, two entrypoints), pushed to the internal registry.
-- [ ] Built in CI with a multi-stage Dockerfile. The builder stage may use uv (`uv sync --locked --no-dev --no-editable --all-extras`). The runtime stage copies only the venv: no uv, no network.
+- [x] `vdreamer:<ver>` (gateway + worker, two entrypoints), pushed to the internal registry. (`ENTRYPOINT ["vdreamer"]`: `docker run vdreamer:<ver> serve|worker|migrate …`. Pushing to the internal registry is the operator's step.)
+- [x] Built in CI with a multi-stage Dockerfile. The builder stage may use uv (`uv sync --locked --no-dev --no-editable --all-extras`). The runtime stage copies only the venv: no uv, no network. (Pinned `uv:0.10.10` in the builder only, which also bakes the tiktoken encodings. The runtime image runs as uid 10001, has a `vdreamer-sandbox` user (uid 10002, D19), sets the offline `ENV`, and asserts `! command -v uv` at build. CI `image` job: build, then `doctor --offline` and a smoke run under `--network none`.)
 
 **Docs**
-- [ ] vLLM prerequisites: `--enable-auto-tool-choice`, a matching `--tool-call-parser`, `--reasoning-parser` (A21).
+- [x] vLLM prerequisites: `--enable-auto-tool-choice`, a matching `--tool-call-parser`, `--reasoning-parser` (A21). (`docs/operations.md` §7, with the air-gapped install, image, topology and environment reference.)
 
-**Exit:** fresh VM + wheelhouse (installed with plain pip) + image → `doctor --offline` green → reference agent runs with egress blocked, and no uv present on the target.
+**Exit:** ✅ verified — locally (Windows host): `uv build` → wheel; `uv export` → hash-pinned `constraints.txt`; a plain-pip venv with no uv on `PATH` ran `vdreamer bundle --vdreamer <wheel> --extra postgres -c constraints.txt`, and all 67 distributions matched the release hashes; a fresh `python -m venv` installed them with `pip install --no-index --find-links wheelhouse --require-hashes -r requirements.lock` (no uv on `PATH`); `doctor --offline` passed (zero egress, tiktoken cache found, vendored assets); and `validate` plus a `dev --input` run of the reference agent completed. `docs/operations.md` describes the same flow on a Linux VM. In CI, the `airgap` job repeats it inside a `--network none` `python:3.11-slim` container (egress truly blocked, no uv) and the `image` job runs the image's `doctor --offline` and a smoke run with the network off. Not run locally: the Docker image build (the Docker engine on this host did not start), which the `image` job covers. Tests: `tests/packaging/` (export-schema determinism, OpenAPI 3.1 validity, the TS generator, bundle lock/constraints/CLI, offline env, `--reload`, the checkpointer check, the store). Full suite: 889 passed, 25 skipped; ruff + mypy (strict) clean.
 
 ---
 

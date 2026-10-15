@@ -40,6 +40,7 @@ from vdreamer.persistence import (
     PersistenceConfigError,
     dsn_from_env,
     open_checkpointer,
+    open_store,
 )
 from vdreamer.queue import PostgresRunQueue
 from vdreamer.threads import PostgresThreadStore
@@ -79,6 +80,8 @@ async def _apply(dsn: str) -> None:
     # factory the worker uses so ``migrate`` and ``worker`` never diverge.
     async with open_checkpointer(dsn):
         print("[ok] checkpointer tables (AsyncPostgresSaver.setup)")
+    async with open_store(dsn):
+        print("[ok] store tables (AsyncPostgresStore.setup)")
 
 
 def run_migrate() -> int:

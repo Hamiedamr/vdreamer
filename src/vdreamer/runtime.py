@@ -126,7 +126,9 @@ class AgentRunner:
         snapshot = self.tool_snapshot()
         if self._compiled is None or snapshot != self._built_snapshot:
             self._compiled = ensure_compiled(
-                self.agent.build(self._ctx), checkpointer=self._checkpointer
+                self.agent.build(self._ctx),
+                checkpointer=self._checkpointer,
+                store=self._ctx.store,
             )
             self._built_snapshot = snapshot
         return self._compiled

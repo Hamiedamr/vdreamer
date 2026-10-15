@@ -119,6 +119,7 @@ from vdreamer.persistence import (
     PersistenceConfigError,
     dsn_from_env,
     open_checkpointer,
+    open_store,
 )
 from vdreamer.queue import InMemoryRunQueue, PostgresRunQueue, RunState
 from vdreamer.resources import ResourcesError
@@ -348,11 +349,13 @@ async def _worker_main(
                 agent, backend_config or BackendConfig(), log=_logger("worker")
             ) as backends,
             open_checkpointer(dsn) as saver,
+            open_store(dsn) as store,
             _open_mcp("worker", mcp_configs) as mcp,
         ):
             runner = AgentRunner(
                 agent,
                 checkpointer=saver,
+                store=store,
                 mcp=mcp,
                 models=backends.models,
                 resources=backends.resources,
@@ -470,6 +473,17 @@ async def _open_dev_checkpointer(db: str) -> AsyncIterator[AsyncSqliteSaver]:
         yield saver
 
 
+@asynccontextmanager
+async def _open_dev_store(db: str) -> AsyncIterator[Any]:
+    """The dev long-term memory store (§2.4): ``AsyncSqliteStore`` on the same file."""
+    from langgraph.store.sqlite.aio import AsyncSqliteStore
+
+    Path(db).parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteStore.from_conn_string(db) as store:
+        await store.setup()
+        yield store
+
+
 async def _dev_gateway(
     agent: BaseAgent,
     checkpointer: Any,
@@ -480,6 +494,7 @@ async def _dev_gateway(
     mcp: MCPRegistry | None = None,
     backends: AgentBackends | None = None,
     headless: HeadlessConfig | None = None,
+    store: Any = None,
 ) -> int:
     """``vdreamer dev`` without ``--input``: gateway + worker loop in one process (D11).
 
@@ -499,6 +514,7 @@ async def _dev_gateway(
     runner = AgentRunner(
         agent,
         checkpointer=checkpointer,
+        store=store,
         mcp=mcp,
         models=backends.models if backends is not None else None,
         resources=backends.resources if backends is not None else None,
@@ -587,6 +603,7 @@ async def _dev_main(
             agent, backend_config or BackendConfig(), log=_logger("dev")
         ) as backends,
         _open_dev_checkpointer(db) as checkpointer,
+        _open_dev_store(db) as store,
         _open_mcp("dev", mcp_configs) as mcp,
     ):
         if input_json is None:
@@ -603,11 +620,13 @@ async def _dev_main(
                     + (f" — removed {expired} past retention" if expired else "")
                 )
                 return await _dev_gateway(
-                    agent, checkpointer, state, host, port, tokens, mcp, backends, headless
+                    agent, checkpointer, state, host, port, tokens, mcp, backends, headless,
+                    store,
                 )
         runner = AgentRunner(
             agent,
             checkpointer=checkpointer,
+            store=store,
             mcp=mcp,
             models=backends.models,
             resources=backends.resources,

@@ -1,4 +1,4 @@
-"""Postgres-backed persistence: the checkpointer factory and durability policy.
+"""Postgres-backed persistence: the checkpointer and store factories, durability policy.
 
 PRD §2.4 ("Persistence" row of the native-primitives table): vdreamer uses
 ``AsyncPostgresSaver`` and never reimplements checkpointing. Durability is
@@ -9,6 +9,12 @@ strings come from the environment, never YAML (A23).
 Milestone 3 note: ``vdreamer dev`` runs on SQLite + a local filesystem store
 (D11) — that mode is *not* this module's concern. This module is the Postgres
 saver factory the ``vdreamer worker`` composes with queue and store wiring.
+
+Milestone 10 adds the long-term memory store (§2.4 "store" row):
+:func:`open_store` opens LangGraph's ``AsyncPostgresStore`` on the same DSN,
+runs its migrations, and yields it — workers hand it to ``build()`` as
+``ctx.store`` (``agent_kwargs()["store"]``) and ``vdreamer migrate`` applies
+its tables. ``vdreamer dev`` uses ``AsyncSqliteStore`` on the dev file.
 """
 
 from __future__ import annotations
@@ -21,8 +27,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 if TYPE_CHECKING:
     # Typing-only: importing langgraph.checkpoint.postgres at module level
     # would hard-require psycopg (the [postgres] extra) in every process.
-    # The runtime import lives in _load_saver_class().
+    # The runtime imports live in _load_saver_class() / _load_store_class().
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from langgraph.store.postgres.aio import AsyncPostgresStore
 
 #: Per-superstep invocation durability (PRD §2.4, A42).
 Durability: TypeAlias = Literal["sync", "async"]
@@ -118,3 +125,29 @@ async def open_checkpointer(dsn: str) -> AsyncGenerator[AsyncPostgresSaver]:
     async with saver_cls.from_conn_string(dsn) as saver:
         await saver.setup()
         yield saver
+
+
+def _load_store_class() -> type[AsyncPostgresStore]:
+    """Import ``AsyncPostgresStore`` lazily (psycopg, the ``[postgres]`` extra)."""
+    try:
+        from langgraph.store.postgres.aio import AsyncPostgresStore
+    except ImportError as exc:
+        raise MissingPostgresDependencyError(
+            "psycopg is required for the vdreamer[postgres] extra: "
+            "pip install 'vdreamer[postgres]'"
+        ) from exc
+    return AsyncPostgresStore
+
+
+@asynccontextmanager
+async def open_store(dsn: str) -> AsyncGenerator[AsyncPostgresStore]:
+    """Open the worker's long-term memory store: connect, migrate, then yield (§2.4).
+
+    One store per worker process, like the checkpointer; ``build()`` receives
+    it as ``ctx.store``. vdreamer never reimplements it (LangGraph's own
+    ``AsyncPostgresStore``, no vector index — retrieval is agent code, §7.2).
+    """
+    store_cls = _load_store_class()
+    async with store_cls.from_conn_string(dsn) as store:
+        await store.setup()
+        yield store

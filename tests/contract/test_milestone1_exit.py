@@ -158,6 +158,7 @@ async def test_milestone1_exit_criterion() -> None:
         "interrupt_policies",
         "durability",
         "agent_kwargs",
+        "checkpointer",  # Milestone 10
         "tools.governed",  # Milestone 5
         "approval.routes",
     ]
