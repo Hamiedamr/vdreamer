@@ -16,7 +16,9 @@ idempotent schema application, DSN from ``VDREAMER_PG_DSN``, A23). Milestone
 
 Milestone 10 also applies the zero-egress environment (:mod:`vdreamer.offline`)
 before every command but ``bundle`` — the one that downloads, on a connected
-host — and adds ``dev --reload`` (:mod:`vdreamer.reload`).
+host — and adds ``dev --reload`` (:mod:`vdreamer.reload`). Milestone 11 adds
+``run``, the terminal client (:mod:`vdreamer.client`), and the conformance kit
+in ``export-schema``'s output.
 """
 
 from __future__ import annotations
@@ -277,6 +279,53 @@ def build_parser() -> argparse.ArgumentParser:
         "(default ./vdreamer-schema)"
     )
 
+    run_parser = subparsers.add_parser(
+        "run",
+        help="terminal client: start or reattach to a run and resolve interrupts inline",
+        description=(
+            "A terminal client over the REST/SSE contract only (docs/protocol.md): streams "
+            "tokens, thinking, tool calls, artifacts and citations, prompts inline to resolve "
+            "interrupts, reconnects with Last-Event-ID, and reattaches with --thread. Chat "
+            "agents loop on 'you>' prompts (--once for one run); headless agents (or "
+            "--trigger) go through /trigger. The token comes from --token-env."
+        ),
+    )
+    run_parser.add_argument("agent", metavar="AGENT", help="the agent's name on the gateway")
+    run_parser.add_argument(
+        "--url", default="http://127.0.0.1:8000", help="gateway base URL (default %(default)s)"
+    )
+    run_parser.add_argument(
+        "--token-env",
+        metavar="VAR",
+        default="VDREAMER_INTERNAL_TOKEN",
+        help="environment variable holding the bearer token (default %(default)s)",
+    )
+    run_parser.add_argument("--user", default=None, help="X-User-Id (default $USER)")
+    run_parser.add_argument(
+        "--roles", default="", help="X-User-Roles, comma-separated (e.g. sql_reviewer)"
+    )
+    run_parser.add_argument("--thread", metavar="ID", default=None, help="continue/reattach")
+    run_parser.add_argument("--input", metavar="JSON", default=None, help="the run input")
+    run_parser.add_argument(
+        "--message", metavar="TEXT", default=None, help="a user message (messages-shaped input)"
+    )
+    run_parser.add_argument(
+        "--field",
+        metavar="NAME",
+        default=None,
+        help="send typed text as {NAME: text} instead of {messages: [...]}",
+    )
+    run_parser.add_argument("--trigger", action="store_true", help="start via /trigger (D15)")
+    run_parser.add_argument(
+        "--service",
+        action="store_true",
+        help="--token-env holds a service token (A16): trigger only, no identity headers",
+    )
+    run_parser.add_argument("--idempotency-key", metavar="KEY", default=None)
+    run_parser.add_argument("--callback", metavar="URL", default=None, help="/trigger callback")
+    run_parser.add_argument("--once", action="store_true", help="exit after one run")
+    run_parser.add_argument("--no-color", action="store_true", help="plain output")
+
     bundle_parser = subparsers.add_parser(
         "bundle",
         help="build the offline install set on a connected host (wheelhouse + hashed lock)",
@@ -469,6 +518,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
             resources=args.resources,
             models=args.models,
+        )
+
+    if args.command == "run":
+        from vdreamer.client import RunOptions, run_terminal
+
+        return run_terminal(
+            RunOptions(
+                agent=args.agent,
+                url=args.url,
+                token_env=args.token_env,
+                user=args.user,
+                roles=tuple(role.strip() for role in args.roles.split(",") if role.strip()),
+                thread=args.thread,
+                input_json=args.input,
+                message=args.message,
+                field_name=args.field,
+                trigger=args.trigger,
+                service=args.service,
+                idempotency_key=args.idempotency_key,
+                callback=args.callback,
+                once=args.once,
+                color=not args.no_color,
+            )
         )
 
     if args.command == "export-schema":

@@ -1,3 +1,6 @@
 # Vendored third-party assets are pinned by sha256 (vdreamer.vendored): never
 # normalize their line endings, or the hashes drift between checkouts.
 src/vdreamer/gateway/static/vendor/** -text
+
+# The conformance kit is a byte-exact contract artifact (M11): no line-ending conversion.
+src/vdreamer/conformance/kit/* -text

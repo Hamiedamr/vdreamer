@@ -1,0 +1,55 @@
+{
+  "name": "reconnect",
+  "description": "Mid-run reconnect: the first connection drops after 4 events; the client resumes with a Last-Event-ID two events behind (duplicates to dedup by seq); then a page refresh rebuilds the state from /threads/{id}/events (reset: true).",
+  "protocol_version": "1.0",
+  "agent": "conf-chat",
+  "steps": [
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": null,
+      "dropped": true,
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"progress\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"label\":\"reading the question\",\"pct\":25.0}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"log\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"level\":\"info\",\"message\":\"answering from general knowledge\"}}\n\nid: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"progress\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":4,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"label\":\"done\",\"pct\":100.0}}\n\n"
+    },
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": "run_1:2",
+      "dropped": false,
+      "body": "id: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"log\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"level\":\"info\",\"message\":\"answering from general knowledge\"}}\n\nid: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"progress\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":4,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"label\":\"done\",\"pct\":100.0}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"message.completed\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":5,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_answer\",\"role\":\"ai\",\"text\":\"Hello! How can I help you today?\",\"thinking\":\"A greeting: reply briefly.\",\"citation_ids\":[]}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"token.delta\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":6,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_answer\",\"text\":\"Hello! How can I help you today?\"}}\n\nid: run_1:7\ndata: {\"v\":\"1.0\",\"type\":\"thinking.delta\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":7,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_answer\",\"text\":\"A greeting: reply briefly.\"}}\n\nid: run_1:8\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":8,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":1}}\n\n"
+    },
+    {
+      "kind": "sse",
+      "path": "/api/v1/threads/thread_1/events",
+      "last_event_id": null,
+      "dropped": false,
+      "reset": true,
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"progress\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"label\":\"reading the question\",\"pct\":25.0}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"log\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"level\":\"info\",\"message\":\"answering from general knowledge\"}}\n\nid: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"progress\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":4,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"label\":\"done\",\"pct\":100.0}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"message.completed\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":5,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_answer\",\"role\":\"ai\",\"text\":\"Hello! How can I help you today?\",\"thinking\":\"A greeting: reply briefly.\",\"citation_ids\":[]}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"token.delta\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":6,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_answer\",\"text\":\"Hello! How can I help you today?\"}}\n\nid: run_1:7\ndata: {\"v\":\"1.0\",\"type\":\"thinking.delta\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":7,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_answer\",\"text\":\"A greeting: reply briefly.\"}}\n\nid: run_1:8\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-chat\",\"seq\":8,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":1}}\n\n"
+    }
+  ],
+  "expected_state": {
+    "status": "completed",
+    "error": null,
+    "messages": [
+      {
+        "id": "msg_answer",
+        "text": "Hello! How can I help you today?",
+        "thinking": "A greeting: reply briefly.",
+        "citations": []
+      }
+    ],
+    "toolCalls": [],
+    "artifacts": [],
+    "interrupts": [],
+    "progress": {
+      "label": "done",
+      "pct": 100.0
+    },
+    "logs": [
+      {
+        "level": "info",
+        "message": "answering from general knowledge"
+      }
+    ]
+  }
+}

@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -426,14 +426,22 @@ class Stack:
 
 
 def make_stack(
-    *, workers: bool, heartbeat_s: float = 0.2, sqlite_path: Path | None = None
+    *,
+    workers: bool,
+    heartbeat_s: float = 0.2,
+    sqlite_path: Path | None = None,
+    extra_agents: Sequence[BaseAgent] = (),
+    worker_agents: Sequence[str] | None = None,
+    poll_interval_s: float = 0.01,
 ) -> Stack:
     """A gateway stack; ``sqlite_path`` switches every store to the SQLite backend.
 
     aiosqlite resolves each call on the caller's own loop, so the stores work
     from the TestClient's loop and from the tests' ``asyncio.run`` alike.
+    ``extra_agents`` join the kit's own (the conformance recorder adds its own);
+    ``worker_agents`` limits which agents get a worker (all by default).
     """
-    agents = all_agents()
+    agents = {**all_agents(), **{agent.name: agent for agent in extra_agents}}
     queue: InMemoryRunQueue
     log: InMemoryEventLog | SqliteEventLog
     threads: InMemoryThreadStore
@@ -487,12 +495,13 @@ def make_stack(
                         agent_name=agent.name,
                         claimant=f"w-{agent.name}",
                         sink_factory=sink_factory,
-                        poll_interval_s=0.01,
+                        poll_interval_s=poll_interval_s,
                         interrupt_store=interrupts,
                         artifact_store=artifacts,
                     ).run(stop)
                 )
                 for agent in agents.values()
+                if worker_agents is None or agent.name in worker_agents
             ]
             try:
                 yield

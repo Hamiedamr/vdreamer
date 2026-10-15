@@ -52,13 +52,15 @@ AGENTS: dict[str, BaseAgent] = {"site-check": SiteAgent(), "chat": ChatAgent()}
 def test_the_export_is_deterministic_and_self_describing() -> None:
     first = build_export(AGENTS)
     assert first == build_export(AGENTS)  # byte-identical: a release diff is the contract diff
-    assert sorted(first) == [
+    contract = [path for path in sorted(first) if not path.startswith("conformance/")]
+    assert contract == [
         "agents/site-check.input.schema.json",
         "events.schema.json",
         "manifest.json",
         "openapi.json",
         "vdreamer.d.ts",
     ]
+    assert "conformance/README.md" in first  # the M11 kit rides the same export
     manifest = json.loads(first["manifest.json"])
     assert manifest["protocol_version"] == PROTOCOL_VERSION == "1.0"
     assert manifest["openapi_version"] == "3.1.0"

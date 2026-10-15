@@ -1,0 +1,67 @@
+{
+  "name": "citations",
+  "description": "An answer with two citations bound to its message_id: one to a PDF artifact (locator.page), one to a URI (locator.section).",
+  "protocol_version": "1.0",
+  "agent": "conf-cite",
+  "steps": [
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": null,
+      "dropped": false,
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"artifact.created\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"artifact_id\":\"art_1\",\"question_id\":\"run_1\",\"session_id\":\"thread_1\",\"kind\":\"file\",\"name\":\"q3-report.pdf\",\"mime_type\":\"application/pdf\",\"size_bytes\":13,\"preview\":{\"filename\":\"q3-report.pdf\",\"mime\":\"application/pdf\"},\"view_url\":\"/api/v1/artifacts/art_1/raw\",\"download_url\":\"/api/v1/artifacts/art_1/download\",\"metadata\":{}}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"citation\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":3,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"citation_id\":\"cit_1\",\"message_id\":\"msg_cited\",\"source\":{\"artifact_id\":\"art_1\",\"title\":\"Q3 report\"},\"locator\":{\"page\":4},\"snippet\":\"Revenue grew 12% year over year.\",\"score\":0.91}}\n\nid: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"citation\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":4,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"citation_id\":\"cit_2\",\"message_id\":\"msg_cited\",\"source\":{\"uri\":\"kb://regions/emea\",\"title\":\"EMEA overview\"},\"locator\":{\"section\":\"2.1\"},\"snippet\":\"EMEA led the growth.\"}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"message.completed\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":5,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_cited\",\"role\":\"ai\",\"text\":\"Revenue grew 12% [1], led by EMEA [2].\",\"citation_ids\":[\"cit_1\",\"cit_2\"]}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"token.delta\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":6,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"message_id\":\"msg_cited\",\"text\":\"Revenue grew 12% [1], led by EMEA [2].\"}}\n\nid: run_1:7\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"conf-cite\",\"seq\":7,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":1}}\n\n"
+    }
+  ],
+  "expected_state": {
+    "status": "completed",
+    "error": null,
+    "messages": [
+      {
+        "id": "msg_cited",
+        "text": "Revenue grew 12% [1], led by EMEA [2].",
+        "thinking": "",
+        "citations": [
+          {
+            "citation_id": "cit_1",
+            "source": {
+              "artifact_id": "art_1",
+              "title": "Q3 report"
+            },
+            "locator": {
+              "page": 4
+            },
+            "snippet": "Revenue grew 12% year over year.",
+            "score": 0.91
+          },
+          {
+            "citation_id": "cit_2",
+            "source": {
+              "uri": "kb://regions/emea",
+              "title": "EMEA overview"
+            },
+            "locator": {
+              "section": "2.1"
+            },
+            "snippet": "EMEA led the growth."
+          }
+        ]
+      }
+    ],
+    "toolCalls": [],
+    "artifacts": [
+      {
+        "artifact_id": "art_1",
+        "kind": "file",
+        "renderer": null,
+        "name": "q3-report.pdf",
+        "mime_type": "application/pdf",
+        "view_url": "/api/v1/artifacts/art_1/raw",
+        "download_url": "/api/v1/artifacts/art_1/download",
+        "render": "file"
+      }
+    ],
+    "interrupts": [],
+    "progress": null,
+    "logs": []
+  }
+}

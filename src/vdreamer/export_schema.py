@@ -11,6 +11,9 @@ What client teams build against, written to ``--out`` (default
   body ``/trigger`` and ``/threads/{id}/runs`` validate against);
 - ``vdreamer.d.ts`` — TypeScript declarations generated from all of the above
   (:mod:`vdreamer.tsgen`; no npm package, A45);
+- ``conformance/`` — the conformance kit (M11): recorded SSE streams with the
+  expected client state, and the README defining the fold
+  (:mod:`vdreamer.conformance`);
 - ``manifest.json`` — protocol and vdreamer versions, the agents, and every
   file's sha256.
 
@@ -37,6 +40,11 @@ from vdreamer.tsgen import declarations, namespace, to_ts, type_name
 DEFAULT_OUT: Final = "vdreamer-schema"
 
 _PLACEHOLDER_TOKEN: Final = "export-schema-placeholder-token"
+
+
+def normalize_newlines(data: bytes) -> bytes:
+    """LF only: a Windows checkout's CRLF must not change the export's hashes."""
+    return data.replace(bytes([13, 10]), bytes([10]))
 
 
 def _dump(document: Any) -> bytes:
@@ -167,6 +175,10 @@ def build_export(agents: Mapping[str, BaseAgent]) -> dict[str, bytes]:
     }
     for name, schema in inputs.items():
         files[f"agents/{name}.input.schema.json"] = _dump(schema)
+    from vdreamer.conformance import kit_files
+
+    for name, data in kit_files().items():
+        files[f"conformance/{name}"] = normalize_newlines(data)
     manifest = {
         "protocol_version": PROTOCOL_VERSION,
         "vdreamer_version": __version__,

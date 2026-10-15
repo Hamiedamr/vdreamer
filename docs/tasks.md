@@ -386,34 +386,52 @@ Also verified:
 **Goal:** everything client teams and AI developers need without vdreamer shipping any frontend code (PRD §6, A45). No npm packages and no Angular.
 
 **Protocol contract**
-- [ ] `export-schema` emits OpenAPI 3.1, the event JSON Schema, per-agent input schemas, and generated TS types.
-- [ ] Each release attaches these artifacts.
-- [ ] Document the normative client behavior from §6.1:
+- [x] `export-schema` emits OpenAPI 3.1, the event JSON Schema, per-agent input schemas, and generated TS types. (Since M10; now also `conformance/`, the kit below.)
+- [x] Each release attaches these artifacts. (The CI `release` job tars the whole `export-schema` output, kit included, onto every `v*` release.)
+- [x] Document the normative client behavior from §6.1 (`docs/protocol.md` §1–§4, with the per-event fold rules in the kit's `README.md`):
   - protocol-version check
   - fetch-based SSE with `Last-Event-ID` reconnect
   - dedup by `seq`
   - ignore unknown event types; treat unknown kinds as downloads
   - the reference fold into run state
-- [ ] Document the interrupt handling obligations from §6.4.
-- [ ] Document the Web Backend proxy requirements from §6.2.
+  - Two rules the recordings surfaced and the docs now state as normative:
+    - `message.completed` is authoritative and may arrive before the message's last `token.delta`s (the batcher flushes at stream end), so later deltas are ignored.
+    - A resolved interrupt re-runs the paused node from the top, re-emitting its `message.completed`/`tool.call` with the same ids, so clients upsert by id.
+- [x] Document the interrupt handling obligations from §6.4. (`docs/protocol.md` §5: `actions[]` only, `edit_schema` forms, the resolve body per source, `expected_version`, `409`/`410`/`403 four_eyes`.)
+- [x] Document the Web Backend proxy requirements from §6.2. (`docs/protocol.md` §1 and §7: headers injected server-side, no buffering, idle timeout > 2× heartbeat, `Last-Event-ID` forwarded, same-origin artifacts.)
 
 **Conformance kit**
-- [ ] Recorded SSE streams, each paired with the expected client state, covering:
+- [x] Recorded SSE streams, each paired with the expected client state, covering:
   - chat
   - mid-run reconnect
   - tool overflow
   - all four interrupt sources
   - artifacts
   - citations
-- [ ] A Python reference fold (test-only, not a shipped SDK) proves every recording produces its expected state.
+  - (`vdreamer.conformance`, package data in `conformance/kit/`, 10 recordings: `chat`, `reconnect` (a drop after 4 events, a lagging `Last-Event-ID` that replays duplicates, then a page-refresh rebuild from `/threads/{id}/events`), `tool_overflow`, `interrupt_require_approval`/`_tool_review`/`_mcp_elicitation`/`_generic` (stream → drop at `awaiting_approval` → the resolve request → `Last-Event-ID` resume), `artifacts` (all five kinds), `citations`, and the hand-written `forward_compat` (an unknown type from a newer minor, unknown kind/renderer, heartbeats, a duplicate seq). Recorded from the real in-process gateway by `tests/conformance/record_kit.py`, with ids and timestamps normalized; marked `-text` in `.gitattributes` so it is byte-identical on every OS.)
+- [x] A Python reference fold (test-only, not a shipped SDK) proves every recording produces its expected state. (`tests/conformance/reference_fold.py`.)
 
 **`vdreamer run <agent>` terminal client**
-- [ ] Starts a run and pretty-prints events (tokens, thinking, tool calls, artifacts, citations).
-- [ ] Prompts inline to resolve interrupts.
-- [ ] Reattaches to a thread after interruption.
-- [ ] Talks to the REST API only, so it exercises the same contract clients use.
+- [x] Starts a run and pretty-prints events (tokens, thinking, tool calls, artifacts, citations). (`vdreamer.client`. Each message's text prints once, even when `message.completed` precedes the deltas. ANSI color only on a TTY.)
+- [x] Prompts inline to resolve interrupts. (It fetches the record and offers its `actions[]`, then builds the §4.5 body per source: `decisions[]` per request for `tool_review`, answers keyed by request for `mcp_elicitation`, an `edit` payload shown with `edit_schema`, text for `feedback`/`respond`. It sends `expected_version`; a `422` is shown and asked again, a `409` refreshes the record, a `403` or a missing inbox (a service token) detaches with a reattach hint.)
+- [x] Reattaches to a thread after interruption. (`--thread ID` follows the thread's active run from its first event; Ctrl-C and detaches print `vdreamer run <agent> --thread <id>`.)
+- [x] Talks to the REST API only, so it exercises the same contract clients use. (httpx with `X-Protocol-Version: 1`, a major mismatch refused, reconnect with exponential backoff plus jitter and `Last-Event-ID`, dedup by `(run_id, seq)`, unknown types shown dimmed. Chat loops on `you>` (`--once` for one run; `--message`, `--field NAME`, `--input JSON`); headless agents, `--trigger` and `--service` go through `/trigger` with an `Idempotency-Key`.)
 
-**Exit:** the conformance kit passes against the Python reference fold. An AI developer can run UC1–UC3 end-to-end, including approvals, using only `vdreamer run`.
+**Exit:** ✅ verified (for the kit) — the conformance kit passes against the Python reference fold:
+- `tests/conformance/test_conformance_kit.py`, 34 tests:
+  - every recording folds to its `expected_state`;
+  - scenario facts are checked on the raw events independently of the fold, and every recorded event validates against `events.schema.json`;
+  - a major mismatch is refused;
+  - a fresh live re-recording folds to the committed states, so the kit is current.
+- `tests/client/test_run_client.py`, 11 tests: `vdreamer run` against a real uvicorn gateway over TCP:
+  - a chat turn with thinking, and the chat loop;
+  - the generic, `require_approval` (a refused edit, then an accepted one) and `tool_review` interrupts answered inline;
+  - a service trigger detaching at a role-gated approval;
+  - reattach to a waiting run;
+  - plus reconnect/dedup/backoff and the protocol check on a scripted transport.
+- Checked by hand across processes: `vdreamer dev` serving the pinger, and `vdreamer run pinger --field message --message … --once` and `vdreamer run pinger --trigger --input … --idempotency-key k1` both reached `[run completed]`.
+- Full suite: 934 passed, 25 skipped; ruff + mypy (strict) clean.
+- Deferred to Milestone 12: the second half of the exit, running UC1–UC3 end to end with `vdreamer run`, because those agents land there.
 
 ---
 

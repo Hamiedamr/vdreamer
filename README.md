@@ -4,9 +4,9 @@ A Python SDK + CLI that serves developer-written `BaseAgent` subclasses — Lang
 
 ## Status
 
-Pre-1.0 (`0.1.0`). Milestones 0–10 are **complete** (`docs/tasks.md`): the `BaseAgent` developer contract; protocol v1.0 with the v2/v3 stream drivers; the run queue with workers and crash recovery; the FastAPI REST/SSE gateway under `/api/v1`; the governed tool pipeline + MCP; artifacts, files and the sandbox; models and resources; the full HITL pipeline (all four interrupt sources through one endpoint); the headless `/trigger` entry with the outbox (signed callbacks and interrupt notifications); and the air-gap packaging (`export-schema`, `bundle`, the OCI image, zero-egress runtime settings). Still to come: the conformance kit and the `vdreamer run` terminal client (M11), and the UC1–UC3 reference agents (M12).
+Pre-1.0 (`0.1.0`). Milestones 0–11 are **complete** (`docs/tasks.md`): the `BaseAgent` developer contract; protocol v1.0 with the v2/v3 stream drivers; the run queue with workers and crash recovery; the FastAPI REST/SSE gateway under `/api/v1`; the governed tool pipeline + MCP; artifacts, files and the sandbox; models and resources; the full HITL pipeline (all four interrupt sources through one endpoint); the headless `/trigger` entry with the outbox (signed callbacks and interrupt notifications); the air-gap packaging (`export-schema`, `bundle`, the OCI image, zero-egress runtime settings); and the client contract (the conformance kit, `docs/protocol.md`) with the `vdreamer run` terminal client. Still to come: the UC1–UC3 reference agents (M12).
 
-Operators: see `docs/operations.md` for the air-gapped install (`vdreamer bundle` → `pip install --no-index --require-hashes`), the image, and the environment reference.
+Client teams: see `docs/protocol.md` and the conformance kit (`vdreamer export-schema` → `conformance/`). Operators: see `docs/operations.md` for the air-gapped install (`vdreamer bundle` → `pip install --no-index --require-hashes`), the image, and the environment reference.
 
 ## Development quickstart
 
@@ -27,6 +27,7 @@ uv run vdreamer validate pinger:agent # smoke agent; needs examples/smoke on PYT
 uv run vdreamer doctor --offline      # asserts zero egress
 uv run vdreamer export-schema --out vdreamer-schema   # OpenAPI 3.1, event schema, TS types
 uv run pytest tests/packaging         # Milestone 10: export-schema, bundle, offline env, reload
+uv run pytest tests/conformance tests/client   # Milestone 11: the kit vs the reference fold; vdreamer run
 ```
 
 To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input` (add `--reload` to restart on source changes): it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, keeping runs, events, threads, approvals and checkpoints in one SQLite file (`--db`, default `./.vdreamer/dev.db`), so a restart picks up where it stopped. The current testing phase runs on this mode; the Postgres topology below comes later. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
@@ -34,6 +35,8 @@ To try the gateway locally with no infrastructure, run `vdreamer dev` without `-
 ```
 PYTHONPATH=examples/smoke uv run vdreamer dev --agent pinger:agent --port 8000
 ```
+
+Then talk to it from another terminal with the same token: `uv run vdreamer run <agent> --message "hi"`. It streams the run, prompts inline for approvals, and `--thread <id>` reattaches.
 
 Agent tools are governed (redaction, timeouts, error containment, oversized results stored as artifacts). MCP servers are declared in a `resources.yaml` passed with `--resources` (or `$VDREAMER_RESOURCES`), for example `netinv: {type: mcp, url: https://mcp.netinv.internal/mcp, bearer_env: NETINV_TOKEN}`; agents select their tools with `ctx.tools.mcp("netinv")`. Agents emit artifacts with `emit_artifact(name, ArtifactKind.TABLE, rows)` (or `return Artifact(...)` from a tool); table artifacts need the `[sandbox]` extra (pyarrow). Under `vdreamer dev`, objects live next to the `.db` file: artifact bytes in `artifacts/`, inbound files (what a `FileRef` names) in `inputs/`, and `safe_extract` output in `extracted/`. `serve`/`worker` keep them in MinIO (`VDREAMER_MINIO_ENDPOINT`, `VDREAMER_MINIO_ACCESS_KEY`, `VDREAMER_MINIO_SECRET_KEY`, optional `VDREAMER_MINIO_BUCKET`/`VDREAMER_MINIO_SECURE`; `vdreamer migrate` creates the bucket and its 30-day lifecycle rule). `ctx.sandbox.run(code)` is POSIX-only; set `VDREAMER_SANDBOX_UID` (worker running as root) for a dedicated sandbox uid.
 

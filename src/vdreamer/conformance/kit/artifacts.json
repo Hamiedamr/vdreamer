@@ -1,0 +1,76 @@
+{
+  "name": "artifacts",
+  "description": "Every artifact kind (§3.4): table, image, html (linking the others by artifact://), json with renderer verdict.v1, and a plain file — each with its preview block.",
+  "protocol_version": "1.0",
+  "agent": "reports",
+  "steps": [
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": null,
+      "dropped": false,
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"artifact.created\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"artifact_id\":\"art_1\",\"question_id\":\"run_1\",\"session_id\":\"thread_1\",\"kind\":\"table\",\"name\":\"scores\",\"mime_type\":\"application/vnd.apache.parquet\",\"size_bytes\":16162,\"preview\":{\"schema\":[{\"name\":\"i\",\"type\":\"int64\"},{\"name\":\"city\",\"type\":\"string\"},{\"name\":\"score\",\"type\":\"int64\"}],\"rows\":[{\"i\":0,\"city\":\"c0\",\"score\":0},{\"i\":1,\"city\":\"c1\",\"score\":37},{\"i\":2,\"city\":\"c2\",\"score\":74},{\"i\":3,\"city\":\"c3\",\"score\":10},{\"i\":4,\"city\":\"c4\",\"score\":47},{\"i\":5,\"city\":\"c5\",\"score\":84},{\"i\":6,\"city\":\"c6\",\"score\":20},{\"i\":7,\"city\":\"c0\",\"score\":57},{\"i\":8,\"city\":\"c1\",\"score\":94},{\"i\":9,\"city\":\"c2\",\"score\":30}],\"row_count\":2500},\"view_url\":\"/api/v1/artifacts/art_1/raw\",\"download_url\":\"/api/v1/artifacts/art_1/download\",\"metadata\":{\"truncated\":false}}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"artifact.created\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"artifact_id\":\"art_2\",\"question_id\":\"run_1\",\"session_id\":\"thread_1\",\"kind\":\"image\",\"name\":\"chart\",\"mime_type\":\"image/png\",\"size_bytes\":73,\"preview\":{\"width\":3,\"height\":2},\"view_url\":\"/api/v1/artifacts/art_2/raw\",\"download_url\":\"/api/v1/artifacts/art_2/download\",\"metadata\":{}}}\n\nid: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"artifact.created\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":4,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"artifact_id\":\"art_3\",\"question_id\":\"run_1\",\"session_id\":\"thread_1\",\"kind\":\"html\",\"name\":\"report\",\"mime_type\":\"text/html; charset=utf-8\",\"size_bytes\":297,\"preview\":{\"title\":\"Q3 report\",\"summary\":\"Scores by city\"},\"view_url\":\"/api/v1/artifacts/art_3/raw\",\"download_url\":\"/api/v1/artifacts/art_3/download\",\"metadata\":{}}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"artifact.created\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":5,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"artifact_id\":\"art_4\",\"question_id\":\"run_1\",\"session_id\":\"thread_1\",\"kind\":\"json\",\"renderer\":\"verdict.v1\",\"name\":\"verdict\",\"mime_type\":\"application/json\",\"size_bytes\":12,\"preview\":{\"body\":{\"ok\":true}},\"view_url\":\"/api/v1/artifacts/art_4/raw\",\"download_url\":\"/api/v1/artifacts/art_4/download\",\"metadata\":{}}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"artifact.created\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":6,\"ts\":\"2026-01-01T00:00:02Z\",\"ns\":[],\"payload\":{\"artifact_id\":\"art_5\",\"question_id\":\"run_1\",\"session_id\":\"thread_1\",\"kind\":\"file\",\"name\":\"notes\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"preview\":{\"filename\":\"notes.txt\",\"mime\":\"text/plain\"},\"view_url\":\"/api/v1/artifacts/art_5/raw\",\"download_url\":\"/api/v1/artifacts/art_5/download\",\"metadata\":{}}}\n\nid: run_1:7\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"reports\",\"seq\":7,\"ts\":\"2026-01-01T00:00:03Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":1}}\n\n"
+    }
+  ],
+  "expected_state": {
+    "status": "completed",
+    "error": null,
+    "messages": [],
+    "toolCalls": [],
+    "artifacts": [
+      {
+        "artifact_id": "art_1",
+        "kind": "table",
+        "renderer": null,
+        "name": "scores",
+        "mime_type": "application/vnd.apache.parquet",
+        "view_url": "/api/v1/artifacts/art_1/raw",
+        "download_url": "/api/v1/artifacts/art_1/download",
+        "render": "table"
+      },
+      {
+        "artifact_id": "art_2",
+        "kind": "image",
+        "renderer": null,
+        "name": "chart",
+        "mime_type": "image/png",
+        "view_url": "/api/v1/artifacts/art_2/raw",
+        "download_url": "/api/v1/artifacts/art_2/download",
+        "render": "image"
+      },
+      {
+        "artifact_id": "art_3",
+        "kind": "html",
+        "renderer": null,
+        "name": "report",
+        "mime_type": "text/html; charset=utf-8",
+        "view_url": "/api/v1/artifacts/art_3/raw",
+        "download_url": "/api/v1/artifacts/art_3/download",
+        "render": "html"
+      },
+      {
+        "artifact_id": "art_4",
+        "kind": "json",
+        "renderer": "verdict.v1",
+        "name": "verdict",
+        "mime_type": "application/json",
+        "view_url": "/api/v1/artifacts/art_4/raw",
+        "download_url": "/api/v1/artifacts/art_4/download",
+        "render": "json"
+      },
+      {
+        "artifact_id": "art_5",
+        "kind": "file",
+        "renderer": null,
+        "name": "notes",
+        "mime_type": "text/plain",
+        "view_url": "/api/v1/artifacts/art_5/raw",
+        "download_url": "/api/v1/artifacts/art_5/download",
+        "render": "file"
+      }
+    ],
+    "interrupts": [],
+    "progress": null,
+    "logs": []
+  }
+}

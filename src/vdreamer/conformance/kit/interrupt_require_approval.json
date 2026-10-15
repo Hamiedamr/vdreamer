@@ -1,0 +1,57 @@
+{
+  "name": "interrupt_require_approval",
+  "description": "require_approval inside an ApprovalGate (kind sql_review, with edit_schema): the stream pauses at awaiting_approval, the client drops it, approves via POST /resolve, and resumes with Last-Event-ID to interrupt.resolved and completion.",
+  "protocol_version": "1.0",
+  "agent": "flow",
+  "steps": [
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": null,
+      "dropped": true,
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"flow\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.requested\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"flow\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"kind\":\"sql_review\",\"actions\":[\"approve\",\"reject\",\"edit\",\"feedback\"],\"payload\":{\"sql\":\"SELECT * FROM orders\",\"plans\":1},\"edit_schema\":{\"additionalProperties\":false,\"properties\":{\"sql\":{\"minLength\":1,\"title\":\"Sql\",\"type\":\"string\"},\"limit\":{\"default\":100,\"maximum\":1000,\"minimum\":1,\"title\":\"Limit\",\"type\":\"integer\"}},\"required\":[\"sql\"],\"title\":\"SqlEdit\",\"type\":\"object\"},\"expires_at\":\"2026-01-01T00:00:02Z\"}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"flow\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"status\":\"awaiting_approval\",\"attempt\":1}}\n\n"
+    },
+    {
+      "kind": "resolve",
+      "path": "/api/v1/interrupts/int_1/resolve",
+      "status": 200,
+      "body": {
+        "expected_version": 1,
+        "action": "approve"
+      }
+    },
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": "run_1:3",
+      "dropped": false,
+      "body": "id: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.resolved\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"flow\",\"seq\":4,\"ts\":\"2026-01-01T00:00:03Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"action\":\"approve\",\"resolved_by\":\"alice\"}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"flow\",\"seq\":5,\"ts\":\"2026-01-01T00:00:04Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":2}}\n\nid: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"flow\",\"seq\":6,\"ts\":\"2026-01-01T00:00:05Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":2}}\n\n"
+    }
+  ],
+  "expected_state": {
+    "status": "completed",
+    "error": null,
+    "messages": [],
+    "toolCalls": [],
+    "artifacts": [],
+    "interrupts": [
+      {
+        "interrupt_id": "int_1",
+        "kind": "sql_review",
+        "actions": [
+          "approve",
+          "reject",
+          "edit",
+          "feedback"
+        ],
+        "approver_role": null,
+        "scope": null,
+        "status": "resolved",
+        "action": "approve",
+        "resolved_by": "alice"
+      }
+    ],
+    "progress": null,
+    "logs": []
+  }
+}

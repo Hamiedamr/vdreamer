@@ -1,0 +1,87 @@
+{
+  "name": "interrupt_tool_review",
+  "description": "HumanInTheLoopMiddleware → kind tool_review, gated to approver_role mail_reviewer: the reviewer submits decisions[] (one per action request, in order).",
+  "protocol_version": "1.0",
+  "agent": "review",
+  "steps": [
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": null,
+      "dropped": true,
+      "body": "id: run_1:1\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":1}}\n\nid: run_1:2\ndata: {\"v\":\"1.0\",\"type\":\"message.completed\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":2,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"message_id\":\"ai_call\",\"role\":\"ai\",\"text\":\"\",\"citation_ids\":[]}}\n\nid: run_1:3\ndata: {\"v\":\"1.0\",\"type\":\"tool.call\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":3,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"tool_call_id\":\"call_mail\",\"name\":\"send_email\",\"source\":\"custom\",\"args\":{\"to\":\"ops@example.internal\",\"body\":\"draft\"}}}\n\nid: run_1:4\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.requested\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":4,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"kind\":\"tool_review\",\"actions\":[\"approve\",\"edit\",\"reject\"],\"payload\":{\"action_requests\":[{\"name\":\"send_email\",\"args\":{\"to\":\"ops@example.internal\",\"body\":\"draft\"},\"description\":\"Tool execution requires approval\\n\\nTool: send_email\\nArgs: {'to': 'ops@example.internal', 'body': 'draft'}\"}],\"review_configs\":[{\"action_name\":\"send_email\",\"allowed_decisions\":[\"approve\",\"edit\",\"reject\"]}]},\"expires_at\":\"2026-01-01T00:00:02Z\",\"approver_role\":\"mail_reviewer\",\"scope\":\"mail:send\"}}\n\nid: run_1:5\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":5,\"ts\":\"2026-01-01T00:00:01Z\",\"ns\":[],\"payload\":{\"status\":\"awaiting_approval\",\"attempt\":1}}\n\n"
+    },
+    {
+      "kind": "resolve",
+      "path": "/api/v1/interrupts/int_1/resolve",
+      "status": 200,
+      "body": {
+        "expected_version": 1,
+        "decisions": [
+          {
+            "action": "approve"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "sse",
+      "path": "/api/v1/runs/run_1/events",
+      "last_event_id": "run_1:5",
+      "dropped": false,
+      "body": "id: run_1:6\ndata: {\"v\":\"1.0\",\"type\":\"interrupt.resolved\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":6,\"ts\":\"2026-01-01T00:00:03Z\",\"ns\":[],\"payload\":{\"interrupt_id\":\"int_1\",\"action\":\"decisions\",\"resolved_by\":\"rita\"}}\n\nid: run_1:7\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":7,\"ts\":\"2026-01-01T00:00:04Z\",\"ns\":[],\"payload\":{\"status\":\"running\",\"attempt\":2}}\n\nid: run_1:8\ndata: {\"v\":\"1.0\",\"type\":\"message.completed\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":8,\"ts\":\"2026-01-01T00:00:05Z\",\"ns\":[],\"payload\":{\"message_id\":\"ai_call\",\"role\":\"ai\",\"text\":\"\",\"citation_ids\":[]}}\n\nid: run_1:9\ndata: {\"v\":\"1.0\",\"type\":\"tool.call\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":9,\"ts\":\"2026-01-01T00:00:06Z\",\"ns\":[],\"payload\":{\"tool_call_id\":\"call_mail\",\"name\":\"send_email\",\"source\":\"custom\",\"args\":{\"to\":\"ops@example.internal\",\"body\":\"draft\"}}}\n\nid: run_1:10\ndata: {\"v\":\"1.0\",\"type\":\"tool.result\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":10,\"ts\":\"2026-01-01T00:00:07Z\",\"ns\":[],\"payload\":{\"tool_call_id\":\"call_mail\",\"status\":\"ok\",\"summary\":\"sent to ops@example.internal\",\"artifact_ids\":[],\"duration_ms\":1}}\n\nid: run_1:11\ndata: {\"v\":\"1.0\",\"type\":\"message.completed\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":11,\"ts\":\"2026-01-01T00:00:08Z\",\"ns\":[],\"payload\":{\"message_id\":\"ai_done\",\"role\":\"ai\",\"text\":\"mailed\",\"citation_ids\":[]}}\n\nid: run_1:12\ndata: {\"v\":\"1.0\",\"type\":\"token.delta\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":12,\"ts\":\"2026-01-01T00:00:09Z\",\"ns\":[],\"payload\":{\"message_id\":\"ai_done\",\"text\":\"mailed\"}}\n\nid: run_1:13\ndata: {\"v\":\"1.0\",\"type\":\"run.status\",\"run_id\":\"run_1\",\"thread_id\":\"thread_1\",\"agent\":\"review\",\"seq\":13,\"ts\":\"2026-01-01T00:00:09Z\",\"ns\":[],\"payload\":{\"status\":\"completed\",\"attempt\":2}}\n\n"
+    }
+  ],
+  "expected_state": {
+    "status": "completed",
+    "error": null,
+    "messages": [
+      {
+        "id": "ai_call",
+        "text": "",
+        "thinking": "",
+        "citations": []
+      },
+      {
+        "id": "ai_done",
+        "text": "mailed",
+        "thinking": "",
+        "citations": []
+      }
+    ],
+    "toolCalls": [
+      {
+        "tool_call_id": "call_mail",
+        "name": "send_email",
+        "source": "custom",
+        "args": {
+          "to": "ops@example.internal",
+          "body": "draft"
+        },
+        "status": "ok",
+        "summary": "sent to ops@example.internal",
+        "artifact_ids": [],
+        "error": null
+      }
+    ],
+    "artifacts": [],
+    "interrupts": [
+      {
+        "interrupt_id": "int_1",
+        "kind": "tool_review",
+        "actions": [
+          "approve",
+          "edit",
+          "reject"
+        ],
+        "approver_role": "mail_reviewer",
+        "scope": "mail:send",
+        "status": "resolved",
+        "action": "decisions",
+        "resolved_by": "rita"
+      }
+    ],
+    "progress": null,
+    "logs": []
+  }
+}
