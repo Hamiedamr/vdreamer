@@ -8,14 +8,15 @@ proof — plus the D2 discovery flags on the CLI: ``--registry`` /
 ``--agents-dir`` resolve a bare name through
 ``vdreamer.discovery.resolve_agent``, while a ``pkg.module:agent`` spec stays
 explicit (it short-circuits inside ``resolve_agent``). Alias resolution and
-model-file probes (Milestone 7) and approval-route wiring (Milestone 8)
-extend this module as they land.
+model-file probes (Milestone 7) extend this module as they land.
 
 Milestone 5 adds the tool checks (§2.3): **no ungoverned tools** — every
 ``ToolNode`` in the compiled graph (subgraphs included) either holds only
 ``GovernedTool`` proxies or runs under ``VDreamerToolMiddleware`` — and
 **approval routes wired** for per-tool gates: a headless agent's approval
-needs an ``approver_role`` (A16). ``--resources`` lets ``build()`` call
+needs an ``approver_role`` (A16). Milestone 8 extends ``approval.routes`` to
+every ``ApprovalGate`` (no offered action unwired) and to headless
+``HumanInTheLoopMiddleware`` reviews. ``--resources`` lets ``build()`` call
 ``ctx.tools.mcp(...)``: the servers are declared but not contacted, so their
 tool lists are empty here.
 
@@ -45,6 +46,7 @@ import pydantic
 from langgraph.graph import StateGraph
 
 from vdreamer.agents import BaseAgent, BuildContext, Mode
+from vdreamer.approval import approval_gates
 from vdreamer.context import VDreamerContext
 from vdreamer.discovery import AgentLoadError, resolve_agent
 from vdreamer.governance import GovernedTool, ToolKit, effective_policy
@@ -226,7 +228,14 @@ def _check_tools_governed(compiled: Any) -> Check:
 
 
 def _check_approval_routes(agent: BaseAgent, compiled: Any) -> Check:
-    """§2.3 approval routes, per-tool gates: a headless run needs ``approver_role`` (A16)."""
+    """§2.3 approval routes wired, and A16's ``approver_role`` for headless agents.
+
+    Covers per-tool gates (``Policy.approval``), every ``ApprovalGate`` (an
+    offered action with no node behind it is unwired — a ``HEADLESS`` agent's
+    ``reject`` needs none, the run ends ``rejected``), and
+    ``HumanInTheLoopMiddleware`` reviews (role via ``interrupt_policies``).
+    """
+    headless = agent.mode in (Mode.HEADLESS, Mode.BOTH)
     policies = agent.tool_policies if isinstance(agent.tool_policies, Mapping) else {}
     gated: list[str] = []
     missing: list[str] = []
@@ -238,15 +247,55 @@ def _check_approval_routes(agent: BaseAgent, compiled: Any) -> Check:
             if policy.approval is None:
                 continue
             gated.append(tool.name)
-            if agent.mode in (Mode.HEADLESS, Mode.BOTH) and not policy.approval.approver_role:
+            if headless and not policy.approval.approver_role:
                 missing.append(tool.name)
+    problems: list[str] = []
     if missing:
-        return Check(
-            "approval.routes",
-            False,
-            f"headless approval gates without an approver_role (A16): {sorted(missing)}",
+        problems.append(
+            f"headless approval gates without an approver_role (A16): {sorted(missing)}"
         )
+    for gate in approval_gates(compiled):
+        kind = gate.get("kind")
+        gated.append(f"ApprovalGate({kind})")
+        routes = gate.get("routes") or {}
+        unwired = [
+            action
+            for action, node in routes.items()
+            if node is None and not (agent.mode is Mode.HEADLESS and action == "reject")
+        ]
+        if unwired:
+            problems.append(f"ApprovalGate({kind!r}) has unwired routes: {unwired}")
+        if headless and not gate.get("approver_role"):
+            problems.append(f"headless ApprovalGate({kind!r}) without an approver_role (A16)")
+    if headless and _has_hitl_middleware(compiled) and not _review_role(agent):
+        problems.append(
+            "headless HumanInTheLoopMiddleware without an approver_role: set "
+            "interrupt_policies['tool_review'] = InterruptPolicy(approver_role=...) (A16)"
+        )
+    if problems:
+        return Check("approval.routes", False, "; ".join(problems))
     return Check("approval.routes", True, ", ".join(sorted(gated)) if gated else "(no gates)")
+
+
+def _has_hitl_middleware(compiled: Any) -> bool:
+    """A ``create_agent`` graph with ``HumanInTheLoopMiddleware`` (its node names say so)."""
+    graphs = [compiled]
+    try:
+        graphs += [sub for _ns, sub in compiled.get_subgraphs(recurse=True)]
+    except Exception:
+        pass
+    return any(
+        str(name).startswith("HumanInTheLoopMiddleware")
+        for graph in graphs
+        for name in (getattr(graph, "nodes", None) or {})
+    )
+
+
+def _review_role(agent: BaseAgent) -> bool:
+    """Every tool review gets an approver_role from ``interrupt_policies`` (§4.5)."""
+    policies = agent.interrupt_policies if isinstance(agent.interrupt_policies, Mapping) else {}
+    policy = policies.get("tool_review")
+    return isinstance(policy, InterruptPolicy) and bool(policy.approver_role)
 
 
 def _check_policy_mapping(

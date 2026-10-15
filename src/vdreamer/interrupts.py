@@ -21,29 +21,48 @@ Who writes what:
   compare-and-swap on ``version`` (A12: the first resolver wins, the second
   gets ``409``), then plants the resume map on the run and requeues it.
 
-Milestone 4 scope: the record, the store, and the resolve route's version /
-expiry / role / action checks. ``edit_schema`` validation, four-eyes
-(``HITL_STRICT_SCOPES``, A32), the expiry sweeper, headless ``reject →
-rejected``, and the non-``require_approval`` sources' policies
-(``interrupt_policies``) are Milestone 8.
+Milestone 8 adds the policy around the record:
+
+- :func:`apply_interrupt_policy` — ``BaseAgent.interrupt_policies`` attach
+  ``approver_role`` / ``scope`` / TTL to interrupts raised outside
+  ``require_approval`` (§4.5); the worker applies it before the record and the
+  event exist, so both carry the same policy;
+- :func:`is_strict_scope` — four-eyes (``HITL_STRICT_SCOPES``, A32);
+- :class:`InterruptSweeper` — the leader-elected expiry sweeper (§4.4): an
+  overdue interrupt → ``expired``, its run → ``expired`` (the thread unlocks);
+- :func:`end_waiting_run` — how a run no worker holds is ended (headless
+  ``reject → rejected`` by the gateway, expiry by the sweeper).
 """
 
 from __future__ import annotations
 
 import abc
 import asyncio
+import builtins
+import contextlib
 import enum
+import fnmatch
 import json
+import logging
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime
-from typing import Any, Final
+from datetime import UTC, datetime, timedelta
+from typing import Any, Final, Protocol
 
-from vdreamer.eventlog import json_text
-from vdreamer.events import EventEnvelope, EventType
-from vdreamer.queue import _load_async_connection_class
+from vdreamer.eventlog import EventSink, json_text
+from vdreamer.events import ErrorInfo, EventEnvelope, EventType, RunStatusPayload
+from vdreamer.queue import (
+    InvalidTransition,
+    RunQueue,
+    RunRecord,
+    RunState,
+    _load_async_connection_class,
+)
+from vdreamer.tools import InterruptPolicy
+
+_log = logging.getLogger(__name__)
 
 
 class InterruptStatus(enum.StrEnum):
@@ -156,6 +175,9 @@ def visible_to(record: InterruptRecord, viewer: Viewer) -> bool:
 
 _visible = visible_to  # the stores' ``visible_to`` parameter shadows the function
 
+#: How many overdue interrupts one ``expire_overdue`` call expires at most.
+EXPIRY_BATCH: Final[int] = 100
+
 
 class InterruptStore(abc.ABC):
     """The §4.2 records: created by workers, resolved by the gateway."""
@@ -202,6 +224,16 @@ class InterruptStore(abc.ABC):
     @abc.abstractmethod
     async def cancel_for_run(self, run_id: str) -> int:
         """Mark the run's pending interrupts ``cancelled`` (the run was cancelled)."""
+
+    @abc.abstractmethod
+    async def expire_overdue(
+        self, now: float | None = None, *, limit: int = EXPIRY_BATCH
+    ) -> builtins.list[InterruptRecord]:
+        """``pending → expired`` for up to ``limit`` records past ``expires_at`` (§4.4).
+
+        Bumps ``version`` (a resolver holding the old one gets ``409``/``410``)
+        and returns the expired records, oldest deadline first.
+        """
 
 
 class InMemoryInterruptStore(InterruptStore):
@@ -282,6 +314,27 @@ class InMemoryInterruptStore(InterruptStore):
                     )
                     cancelled += 1
             return cancelled
+
+    async def expire_overdue(
+        self, now: float | None = None, *, limit: int = EXPIRY_BATCH
+    ) -> builtins.list[InterruptRecord]:
+        at = now if now is not None else time.time()
+        async with self._lock:
+            overdue = sorted(
+                (
+                    record
+                    for record in self._records.values()
+                    if record.status is InterruptStatus.PENDING and record.is_expired(at)
+                ),
+                key=lambda record: (record.expires_at or 0.0, record.interrupt_id),
+            )[:limit]
+            expired = [
+                replace(record, status=InterruptStatus.EXPIRED, version=record.version + 1)
+                for record in overdue
+            ]
+            for record in expired:
+                self._records[record.interrupt_id] = record
+            return expired
 
 
 #: The ``interrupts`` table (§4.2). Idempotent; ``vdreamer migrate`` applies it.
@@ -364,6 +417,22 @@ _CANCEL_FOR_RUN_SQL: Final[str] = """
 UPDATE interrupts
 SET status = 'cancelled', version = version + 1
 WHERE run_id = %s AND status = 'pending'
+"""
+
+#: §4.4: one batch of overdue interrupts → ``expired``. ``SKIP LOCKED`` leaves a
+#: row a resolver is updating to that resolver's compare-and-swap.
+_EXPIRE_OVERDUE_SQL: Final[str] = f"""
+UPDATE interrupts
+SET status = 'expired', version = version + 1
+WHERE interrupt_id IN (
+    SELECT interrupt_id
+    FROM interrupts
+    WHERE status = 'pending' AND expires_at <= to_timestamp(%s::double precision)
+    ORDER BY expires_at, interrupt_id
+    LIMIT %s
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING {_INTERRUPT_COLUMNS}
 """
 
 
@@ -485,3 +554,287 @@ class PostgresInterruptStore(InterruptStore):
         async with self._conn() as conn:
             cur = await conn.execute(_CANCEL_FOR_RUN_SQL, (run_id,))
             return int(cur.rowcount)
+
+    async def expire_overdue(
+        self, now: float | None = None, *, limit: int = EXPIRY_BATCH
+    ) -> builtins.list[InterruptRecord]:
+        at = now if now is not None else time.time()
+        async with self._conn() as conn:
+            cur = await conn.execute(_EXPIRE_OVERDUE_SQL, (at, limit))
+            rows = await cur.fetchall()
+        records = [self._row_to_record(row) for row in rows]
+        return sorted(records, key=lambda record: (record.expires_at or 0.0, record.interrupt_id))
+
+
+# ---------------------------------------------------------------------------
+# Policy: interrupt_policies (§4.5) and four-eyes (A32)
+# ---------------------------------------------------------------------------
+
+#: The §4.5 kinds raised outside ``require_approval`` — what ``interrupt_policies`` cover.
+TOOL_REVIEW_KIND: Final[str] = "tool_review"
+MCP_ELICITATION_KIND: Final[str] = "mcp_elicitation"
+GENERIC_KIND: Final[str] = "generic"
+POLICY_KINDS: Final[frozenset[str]] = frozenset(
+    {TOOL_REVIEW_KIND, MCP_ELICITATION_KIND, GENERIC_KIND}
+)
+
+
+def interrupt_tool_names(kind: str, payload: Mapping[str, Any]) -> list[str]:
+    """The tools an interrupt is about: a review's actions, an elicitation's tool."""
+    if kind == TOOL_REVIEW_KIND:
+        requests = payload.get("action_requests")
+        return [
+            str(request["name"])
+            for request in (requests if isinstance(requests, list) else ())
+            if isinstance(request, Mapping) and request.get("name")
+        ]
+    if kind == MCP_ELICITATION_KIND and payload.get("tool_name"):
+        return [str(payload["tool_name"])]
+    return []
+
+
+def _matching_policies(
+    kind: str, payload: Mapping[str, Any], policies: Mapping[str, InterruptPolicy]
+) -> list[InterruptPolicy]:
+    """Tool-name keys (exact, else the first ``fnmatch`` glob) in request order, then the kind."""
+    matched: list[InterruptPolicy] = []
+    for name in interrupt_tool_names(kind, payload):
+        if name in policies:
+            matched.append(policies[name])
+            continue
+        for key, policy in policies.items():
+            if key not in POLICY_KINDS and fnmatch.fnmatchcase(name, key):
+                matched.append(policy)
+                break
+    if kind in policies:
+        matched.append(policies[kind])
+    return matched
+
+
+def apply_interrupt_policy(
+    event_payload: Mapping[str, Any],
+    policies: Mapping[str, InterruptPolicy],
+    *,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Attach ``interrupt_policies`` to one ``interrupt.requested`` payload (§4.5).
+
+    Only the sources outside ``require_approval`` (:data:`POLICY_KINDS`) take
+    a policy — ``require_approval`` declares its own. A tool-name key beats the
+    kind key; per field, the first matching policy that sets it wins, and an
+    unset field keeps the source's own value. ``ttl_hours`` restarts the
+    clock: ``expires_at = now + ttl``.
+    """
+    updated = dict(event_payload)
+    kind = str(updated.get("kind") or "")
+    if kind not in POLICY_KINDS or not policies:
+        return updated
+    payload = updated.get("payload")
+    matched = _matching_policies(kind, payload if isinstance(payload, Mapping) else {}, policies)
+    approver_role = next((p.approver_role for p in matched if p.approver_role), None)
+    scope = next((p.scope for p in matched if p.scope), None)
+    ttl_hours = next((p.ttl_hours for p in matched if p.ttl_hours is not None), None)
+    if approver_role is not None:
+        updated["approver_role"] = approver_role
+    if scope is not None:
+        updated["scope"] = scope
+    if ttl_hours is not None:
+        start = datetime.fromtimestamp(now if now is not None else time.time(), UTC)
+        updated["expires_at"] = (start + timedelta(hours=ttl_hours)).isoformat()
+    return updated
+
+
+def is_strict_scope(scope: str | None, strict_scopes: Sequence[str]) -> bool:
+    """A32: ``scope`` matches a ``HITL_STRICT_SCOPES`` pattern (``fnmatch``) → four-eyes."""
+    return scope is not None and any(
+        fnmatch.fnmatchcase(scope, pattern) for pattern in strict_scopes
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ending a run no worker holds; the expiry sweeper (§4.3, §4.4)
+# ---------------------------------------------------------------------------
+
+
+async def end_waiting_run(
+    queue: RunQueue,
+    interrupts: InterruptStore,
+    writer: EventSink,
+    run: RunRecord,
+    status: RunState,
+    *,
+    error: ErrorInfo | None = None,
+) -> bool:
+    """Move an ``awaiting_approval`` run to a terminal ``status`` and log it.
+
+    No worker holds a waiting run (approvals free the worker, §3.2), so
+    whoever ends it — the gateway on a headless ``reject``, the sweeper on
+    expiry — writes its final ``run.status``; its other pending interrupts are
+    ``cancelled``. ``False`` when the run already left ``awaiting_approval``
+    (a concurrent cancel or resume won): nothing is written then.
+    """
+    try:
+        await queue.finish(run.id, status)
+    except InvalidTransition:
+        return False
+    await interrupts.cancel_for_run(run.id)
+    await writer.write(
+        EventEnvelope(
+            type=EventType.RUN_STATUS,
+            run_id=run.id,
+            thread_id=run.thread_id or run.id,
+            agent=run.agent,
+            seq=0,  # the log allocates the real seq
+            payload=RunStatusPayload(
+                status=status.value, attempt=run.attempt, error=error
+            ).event_payload(),
+        )
+    )
+    return True
+
+
+class Leader(Protocol):
+    """Leader election for the sweeper: only the leader sweeps (§4.4)."""
+
+    async def is_leader(self) -> bool:
+        """Try to hold leadership; ``True`` while this process holds it."""
+        ...
+
+    async def close(self) -> None:
+        """Give leadership up."""
+        ...
+
+
+class SingleProcessLeader:
+    """Always the leader — ``vdreamer dev`` and the tests run one gateway (D11)."""
+
+    async def is_leader(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+
+#: The advisory-lock key the gateway replicas' sweepers contend for.
+SWEEPER_LOCK_KEY: Final[int] = 0x76_6452_5357  # "vdRSW"
+
+
+class PostgresAdvisoryLeader:
+    """Leadership = a session-level ``pg_try_advisory_lock`` on a held connection.
+
+    Every gateway replica tries on each sweep; the one whose connection holds
+    the lock sweeps. A dropped connection releases the lock server-side, so
+    another replica takes over on its next try.
+    """
+
+    def __init__(self, dsn: str, key: int = SWEEPER_LOCK_KEY) -> None:
+        self._dsn = dsn
+        self._key = key
+        self._conn: Any = None
+
+    async def is_leader(self) -> bool:
+        if self._conn is not None:
+            try:
+                await self._conn.execute("SELECT 1")
+                return True
+            except Exception:  # the connection, and with it the lock, is gone
+                await self.close()
+        try:
+            conn = await _load_async_connection_class().connect(self._dsn, autocommit=True)
+        except Exception as error:
+            _log.warning("interrupt sweeper: cannot reach Postgres (%s)", error)
+            return False
+        try:
+            cur = await conn.execute("SELECT pg_try_advisory_lock(%s)", (self._key,))
+            row = await cur.fetchone()
+        except Exception:
+            await conn.close()
+            raise
+        if row is not None and row[0]:
+            self._conn = conn
+            return True
+        await conn.close()
+        return False
+
+    async def close(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                await conn.close()
+
+
+#: How often the sweeper looks for overdue interrupts.
+SWEEP_INTERVAL_S: Final[float] = 30.0
+
+#: ``run.status.error.code`` of a run whose interrupt lapsed.
+INTERRUPT_EXPIRED_CODE: Final[str] = "interrupt_expired"
+
+
+class InterruptSweeper:
+    """The leader-elected expiry sweeper (§4.4).
+
+    Each sweep (leader only): overdue ``pending`` interrupts → ``expired``;
+    each one's run, still ``awaiting_approval``, → ``expired`` with a final
+    ``run.status`` (``error.code = "interrupt_expired"``), which unlocks the
+    thread. The resolve route answers ``410`` for an overdue interrupt even
+    before a sweep reaches it.
+    """
+
+    def __init__(
+        self,
+        interrupts: InterruptStore,
+        queue: RunQueue,
+        writer: EventSink,
+        *,
+        leader: Leader | None = None,
+        interval_s: float = SWEEP_INTERVAL_S,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._interrupts = interrupts
+        self._queue = queue
+        self._writer = writer
+        self._leader: Leader = leader if leader is not None else SingleProcessLeader()
+        self._interval_s = interval_s
+        self._clock = clock
+
+    async def sweep_once(self) -> list[InterruptRecord]:
+        """One sweep; returns the interrupts it expired (none when not the leader)."""
+        if not await self._leader.is_leader():
+            return []
+        expired: list[InterruptRecord] = []
+        while True:
+            batch = await self._interrupts.expire_overdue(self._clock())
+            expired += batch
+            if len(batch) < EXPIRY_BATCH:
+                break
+        for run_id in dict.fromkeys(record.run_id for record in expired):
+            run = await self._queue.get(run_id)
+            if run is None or run.status is not RunState.AWAITING_APPROVAL:
+                continue
+            ended = await end_waiting_run(
+                self._queue,
+                self._interrupts,
+                self._writer,
+                run,
+                RunState.EXPIRED,
+                error=ErrorInfo(
+                    code=INTERRUPT_EXPIRED_CODE,
+                    message="an approval was not resolved before it expired",
+                ),
+            )
+            if ended:
+                _log.info("run %s expired: its interrupt lapsed (§4.4)", run_id)
+        return expired
+
+    async def run(self, stop: asyncio.Event) -> None:
+        """Sweep every ``interval_s`` until ``stop`` is set; leadership is released at exit."""
+        try:
+            while not stop.is_set():
+                try:
+                    await self.sweep_once()
+                except Exception:  # a failed sweep is retried next interval
+                    _log.exception("interrupt sweep failed")
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), self._interval_s)
+        finally:
+            await self._leader.close()

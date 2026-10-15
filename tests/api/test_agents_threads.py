@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 def test_list_agents_hides_role_gated_agents(client: TestClient) -> None:
     names = [a["name"] for a in client.get("/api/v1/agents", headers=headers()).json()["agents"]]
     assert names == [
-        "batch", "echo", "elicit", "form", "gate", "reports", "reviewed", "tooling", "unpack"
+        "ask", "batch", "echo", "elicit", "flow", "form", "gate", "reports", "review",
+        "reviewed", "sitecheck", "strict", "tooling", "unpack",
     ]
     with_role = client.get("/api/v1/agents", headers=headers(roles=("netops",))).json()
     assert "secret" in [agent["name"] for agent in with_role["agents"]]

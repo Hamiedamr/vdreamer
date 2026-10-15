@@ -87,8 +87,10 @@ MAX_ATTEMPTS: Final[int] = 3
 #: The §3.2 lifecycle as a from→allowed-targets map; terminal states map to
 #: nothing (they are final). ``rejected`` and ``expired`` are reachable from
 #: ``running`` because §3.2's terminal line follows the
-#: ``(awaiting_approval → running)*`` loop — a headless reject finishes the
-#: resumed run (§4.3) and ``requeue_expired`` expires an exhausted one.
+#: ``(awaiting_approval → running)*`` loop (``requeue_expired`` expires an
+#: exhausted run), and from ``awaiting_approval`` because no worker holds a
+#: waiting run: the gateway rejects it on a headless ``reject`` (§4.3) and the
+#: expiry sweeper expires it once its interrupt lapses (§4.4).
 #: ``running → queued`` is deliberately absent: returning a lost run to the
 #: queue is the recovery sweep's *requeue* (the PRD's own word), not a
 #: lifecycle step — see ``RunQueue.requeue_expired``.
@@ -105,7 +107,7 @@ _ALLOWED_TRANSITIONS: Final[Mapping[RunState, frozenset[RunState]]] = {
         }
     ),
     RunState.AWAITING_APPROVAL: frozenset(
-        {RunState.QUEUED, RunState.EXPIRED, RunState.CANCELLED}
+        {RunState.QUEUED, RunState.REJECTED, RunState.EXPIRED, RunState.CANCELLED}
     ),
     RunState.COMPLETED: frozenset(),
     RunState.FAILED: frozenset(),
@@ -253,8 +255,10 @@ class RunQueue(abc.ABC):
     async def finish(self, run_id: str, status: RunState) -> None:
         """Move a run to a terminal status, clearing its lease and claim.
 
-        ``status`` must be terminal: ``completed``/``failed``/``rejected``
-        from ``running``, or ``cancelled`` from any active state (the
+        ``status`` must be terminal: ``completed``/``failed`` from
+        ``running``, ``rejected``/``expired`` from ``running`` or
+        ``awaiting_approval`` (the gateway's headless reject and the expiry
+        sweeper, §4.3–§4.4), or ``cancelled`` from any active state (the
         ``cancel`` method is the friendlier spelling of the latter).
 
         Raises:
@@ -695,14 +699,23 @@ WHERE id = %s AND status = 'running'
 RETURNING id
 """
 
-_FINISH_RUNNING_SQL: Final[str] = """
+#: ``finish`` for every terminal status but ``cancelled``: the allowed source
+#: states (``_finish_sources``) guard the UPDATE, like the in-memory map.
+_FINISH_SQL: Final[str] = """
 UPDATE runs
 SET status = %s,
     claimed_by = NULL,
     lease_expires_at = NULL,
     updated_at = now()
-WHERE id = %s AND status = 'running'
+WHERE id = %s AND status = ANY(%s::text[])
 """
+
+
+def _finish_sources(status: RunState) -> list[str]:
+    """The states :data:`_ALLOWED_TRANSITIONS` lets ``finish`` reach ``status`` from."""
+    return sorted(
+        source.value for source, targets in _ALLOWED_TRANSITIONS.items() if status in targets
+    )
 
 #: Cancel any active run and report the status it had: the ``prior`` CTE locks
 #: and reads the row before the UPDATE rewrites it, so the caller learns who
@@ -941,9 +954,11 @@ class PostgresRunQueue(RunQueue):
     async def finish(self, run_id: str, status: RunState) -> None:
         if status not in TERMINAL_STATES:
             raise ValueError(f"finish() needs a terminal status, got {status!r}")
-        sql = _CANCEL_SQL if status is RunState.CANCELLED else _FINISH_RUNNING_SQL
-        params: tuple[str, ...] = (
-            (run_id,) if status is RunState.CANCELLED else (status.value, run_id)
+        sql = _CANCEL_SQL if status is RunState.CANCELLED else _FINISH_SQL
+        params: tuple[Any, ...] = (
+            (run_id,)
+            if status is RunState.CANCELLED
+            else (status.value, run_id, _finish_sources(status))
         )
         async with self._conn() as conn:
             cur = await conn.execute(sql, params)

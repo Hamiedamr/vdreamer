@@ -89,7 +89,11 @@ from vdreamer.eventlog import (
     PostgresEventLog,
     PostgresEventStore,
 )
-from vdreamer.interrupts import PostgresInterruptStore
+from vdreamer.interrupts import (
+    InterruptSweeper,
+    PostgresAdvisoryLeader,
+    PostgresInterruptStore,
+)
 from vdreamer.mcp import MCPRegistry, MCPServerConfig
 from vdreamer.models import ModelsError, ModelUnavailable
 from vdreamer.network import NetworkAllowlist
@@ -389,6 +393,7 @@ async def _dev_gateway(
     on SQLite, not Postgres). Required MCP servers are ``/readyz`` probes.
     """
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
+    from vdreamer.gateway.settings import strict_scopes_from_env
 
     queue = state.queue
     log = state.events
@@ -428,18 +433,23 @@ async def _dev_gateway(
         probes=mcp.probes() if mcp is not None else {},
     )
 
+    # §4.4: one process, so the sweeper is always the leader.
+    sweeper = InterruptSweeper(interrupts, queue, log)
+
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[None]:
         stop = asyncio.Event()
         loop_task = asyncio.create_task(worker.run(stop), name="vdreamer-dev-worker")
+        sweep_task = asyncio.create_task(sweeper.run(stop), name="vdreamer-dev-sweeper")
         try:
             yield
         finally:
             stop.set()
             with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.wait_for(loop_task, 5.0)
+                await asyncio.wait_for(asyncio.gather(loop_task, sweep_task), 5.0)
 
-    app = create_app(backend, GatewaySettings(tokens=tokens), lifespan=lifespan)
+    settings = GatewaySettings(tokens=tokens, strict_scopes=strict_scopes_from_env())
+    app = create_app(backend, settings, lifespan=lifespan)
     print(f"vdreamer dev: gateway on http://{host}:{port}/api/v1 (docs: /api/v1/docs)")
     await _uvicorn_serve(app, host, port)
     print("vdreamer dev: stopped")
@@ -662,6 +672,7 @@ async def _serve_main(
 ) -> int:
     """The gateway process body: Postgres stores, ``LISTEN`` loop, uvicorn (§2.1)."""
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
+    from vdreamer.gateway.settings import strict_scopes_from_env
 
     queue = PostgresRunQueue(dsn)
     threads = PostgresThreadStore(dsn)
@@ -698,15 +709,26 @@ async def _serve_main(
             probes={"postgres": queue.probe, "event_listener": listener.probe, **probes},
         )
 
+        # §4.4: every replica runs a sweeper; the advisory lock elects the one that sweeps.
+        sweeper = InterruptSweeper(
+            interrupts, queue, store, leader=PostgresAdvisoryLeader(dsn)
+        )
+
         @asynccontextmanager
         async def lifespan() -> AsyncIterator[None]:
             listener.start()
+            stop = asyncio.Event()
+            sweep_task = asyncio.create_task(sweeper.run(stop), name="vdreamer-sweeper")
             try:
                 yield
             finally:
+                stop.set()
+                with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                    await asyncio.wait_for(sweep_task, 5.0)
                 await listener.stop()
 
-        app = create_app(backend, GatewaySettings(tokens=tokens), lifespan=lifespan)
+        settings = GatewaySettings(tokens=tokens, strict_scopes=strict_scopes_from_env())
+        app = create_app(backend, settings, lifespan=lifespan)
         names = ", ".join(sorted(agents))
         print(f"vdreamer serve: agents {names}")
         print(f"vdreamer serve: http://{host}:{port}/api/v1 (docs: /api/v1/docs)")

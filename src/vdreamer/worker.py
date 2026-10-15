@@ -88,11 +88,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from vdreamer import metrics
+from vdreamer.agents import runs_headless
 from vdreamer.artifacts import ArtifactStore, bind_artifact_store
 from vdreamer.context import VDreamerContext
 from vdreamer.eventlog import EventSink, InMemoryEventSink
 from vdreamer.events import ErrorInfo, EventEnvelope, EventType, RunStatusPayload
-from vdreamer.interrupts import InterruptStore, record_from_event
+from vdreamer.interrupts import InterruptStore, apply_interrupt_policy, record_from_event
 from vdreamer.queue import (
     LEASE_INTERVAL_S,
     InvalidTransition,
@@ -101,6 +102,7 @@ from vdreamer.queue import (
     RunState,
 )
 from vdreamer.runtime import RUN_ID_CONFIGURABLE_KEY, AgentRunner, is_reserved_configurable_key
+from vdreamer.tools import InterruptPolicy
 
 _log = logging.getLogger(__name__)
 
@@ -210,10 +212,12 @@ class _RunSink(EventSink):
         inner: EventSink,
         control: RunControl,
         on_interrupt: Callable[[EventEnvelope], Awaitable[None]] | None = None,
+        interrupt_policies: Mapping[str, InterruptPolicy] | None = None,
     ) -> None:
         self._inner = inner
         self._control = control
         self._on_interrupt = on_interrupt
+        self._interrupt_policies = interrupt_policies or {}
         self.last_seq = 0
         self.last_status: str | None = None
 
@@ -228,10 +232,22 @@ class _RunSink(EventSink):
         self.last_seq = max(self.last_seq, envelope.seq)
         if envelope.type is EventType.RUN_STATUS:
             self.last_status = str(envelope.payload.get("status"))
-        elif envelope.type is EventType.INTERRUPT_REQUESTED and self._on_interrupt is not None:
-            # The record first, then the event: a client reacting to
-            # ``interrupt.requested`` must find the record in the inbox (§4.2).
-            await self._on_interrupt(envelope)
+        elif envelope.type is EventType.INTERRUPT_REQUESTED:
+            if self._interrupt_policies:
+                # §4.5: the agent's interrupt_policies attach approver_role /
+                # scope / TTL to non-require_approval sources — before the
+                # record and the event, so both carry the same policy.
+                envelope = envelope.model_copy(
+                    update={
+                        "payload": apply_interrupt_policy(
+                            envelope.payload, self._interrupt_policies
+                        )
+                    }
+                )
+            if self._on_interrupt is not None:
+                # The record first, then the event: a client reacting to
+                # ``interrupt.requested`` must find the record in the inbox (§4.2).
+                await self._on_interrupt(envelope)
         await self._inner.write(envelope)
 
     async def write_terminal(self, envelope: EventEnvelope) -> None:
@@ -432,7 +448,13 @@ class Worker:
             async def on_interrupt(envelope: EventEnvelope) -> None:
                 await self._record_interrupt(record, envelope)
 
-        sink = _RunSink(await self._open_sink(record.id), control, on_interrupt=on_interrupt)
+        policies = getattr(self._runner.agent, "interrupt_policies", None)
+        sink = _RunSink(
+            await self._open_sink(record.id),
+            control,
+            on_interrupt=on_interrupt,
+            interrupt_policies=policies if isinstance(policies, Mapping) else None,
+        )
         heartbeat = asyncio.create_task(self._heartbeat_loop(record.id, control))
         try:
             if control.drain_requested:  # a drain landed before the run started
@@ -685,6 +707,7 @@ class Worker:
             attempt=record.attempt,
             # A6: stable per run — one run = one execution = one user turn.
             idempotency_key=record.id,
+            headless=runs_headless(self._runner.agent),
         )
 
     async def _open_sink(self, run_id: str) -> EventSink:

@@ -20,6 +20,7 @@ from importlib import metadata as importlib_metadata
 
 from vdreamer._extract import ExtractLimits
 from vdreamer.agents import BaseAgent, BuildContext, Mode
+from vdreamer.approval import ApprovalGate
 from vdreamer.context import (
     MAX_SNIPPET_CHARS,
     Artifact,
@@ -146,6 +147,7 @@ __all__ = [
     "ActiveRunConflict",
     "AgentLoadError",
     "AgentRunner",
+    "ApprovalGate",
     "ApprovalSpec",
     "ArtifactCreatedPayload",
     "ArtifactKind",

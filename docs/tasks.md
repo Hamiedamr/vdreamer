@@ -297,32 +297,32 @@ Also verified:
 **Goal:** the full interrupt/approval pipeline, with all four interrupt sources normalized (§4, A44).
 
 **Approval primitives**
-- [ ] `require_approval(kind, payload, actions, approver_role?, scope?, edit_schema?, ttl_hours?)` wraps `interrupt()` (A15). The policy is serialized and enforced by the gateway.
-- [ ] `ApprovalGate` subgraph: `prepare → gate → {approve|edit: execute, reject: on_reject, feedback: replan}`. `validate` flags unwired routes.
-- [ ] `interrupts` table record (status, version, expires_at, resolved_by, resolution). Resume restarts the node from the top.
+- [x] `require_approval(kind, payload, actions, approver_role?, scope?, edit_schema?, ttl_hours?)` wraps `interrupt()` (A15). The policy is serialized and enforced by the gateway. (Refuses unknown/empty action sets and a non-positive TTL; a headless run without `approver_role` raises `ValueError` (A16, `VDreamerContext.headless`); an `edit` payload is re-validated against `edit_schema` in the node and returned as its JSON dump.)
+- [x] `ApprovalGate` subgraph: `prepare → gate → {approve|edit: execute, reject: on_reject, feedback: replan}`. `validate` flags unwired routes. (`vdreamer.approval`, exported as `vdreamer.ApprovalGate`: the gate routes with a `Command`, so state needs no routing key; `edit` writes the payload's keys into state (or `apply_edit`) before `execute`; `replan` reads the text from `state[decision_key]` and loops back through `prepare`. `build()` returns the `StateGraph`, `compile()` nests it. The gate node carries JSON-safe metadata that `validate` finds in subgraphs too: an offered action with no node is unwired, except a `HEADLESS` agent's `reject`.)
+- [x] `interrupts` table record (status, version, expires_at, resolved_by, resolution). Resume restarts the node from the top. (M4's record; `expire_overdue` added to every store — in-memory, SQLite, Postgres with `FOR UPDATE SKIP LOCKED`.)
 
 **Resolve endpoint**
-- [ ] Body `{action, payload?, text?, expected_version}`. Multi-action interrupts use `{decisions: [...], expected_version}`, in order.
-- [ ] Responses: `200` | `403 forbidden_role` | `409` stale version | `410` expired | `422` invalid edit.
-- [ ] Action semantics:
-  - `edit`: validated against `edit_schema` and written to state before execution
+- [x] Body `{action, payload?, text?, expected_version}`. Multi-action interrupts use `{decisions: [...], expected_version}`, in order. (For `tool_review` one decision per action request, each checked against its own `allowed_decisions`; a single-call review also takes the `action` form.)
+- [x] Responses: `200` | `403 forbidden_role` | `409` stale version | `410` expired | `422` invalid edit. (`edit` payloads are validated against the record's `edit_schema` with `jsonschema` (now a base dependency; Draft 2020-12, as pydantic emits) → `422 invalid_edit` with `details.errors[{loc, msg}]`; an unusable schema refuses the edit rather than skipping it.)
+- [x] Action semantics:
+  - `edit`: validated against `edit_schema` and written to state before execution (gateway + node; `ApprovalGate` writes it)
   - `feedback`: routes to replan
-  - `reject` in headless runs: run → `rejected`
+  - `reject` in headless runs: run → `rejected` (the gateway ends the run straight from `awaiting_approval` — a new §3.2 transition — writes the final `run.status`, cancels sibling interrupts; nothing resumes. Chat `reject` resumes and routes to `on_reject`. Tool-review rejects and elicitation declines always resume: those are the middleware's/server's own decisions.)
   - `respond`: returns text to the tool
 
 **Authority and expiry**
-- [ ] Authority: the initiator by default; `approver_role` overrides. `HITL_STRICT_SCOPES` enforces four-eyes (approver ≠ initiator, A32).
-- [ ] Expiry: a leader-elected sweeper marks the interrupt `expired`, the run `expired`, and unlocks the thread.
-- [ ] `awaiting_approval` frees the worker; resolution enqueues a resume.
+- [x] Authority: the initiator by default; `approver_role` overrides. `HITL_STRICT_SCOPES` enforces four-eyes (approver ≠ initiator, A32). (Comma-separated `fnmatch` patterns from the env (A23), on `GatewaySettings.strict_scopes`; the initiator gets `403 forbidden_role` with `details {reason: "four_eyes", scope}` even when holding the role.)
+- [x] Expiry: a leader-elected sweeper marks the interrupt `expired`, the run `expired`, and unlocks the thread. (`interrupts.InterruptSweeper`, every 30 s in the gateway process: `vdreamer serve` elects with a session-level `pg_try_advisory_lock` (`PostgresAdvisoryLeader`; a dropped connection hands leadership over), `vdreamer dev` is always the leader. The run's final `run.status` is `expired` with `error.code = "interrupt_expired"`. The resolve route already answered `410` lazily.)
+- [x] `awaiting_approval` frees the worker; resolution enqueues a resume. (Since M4.)
 
 **Interrupt-source normalization (A44).** One record, event, and endpoint for all four:
-- [ ] `require_approval`
-- [ ] HITL middleware `interrupt_on` → `tool_review`
-- [ ] MCP elicitation → `mcp_elicitation`
-- [ ] raw `interrupt()` → `generic`
-- [ ] Policies for non-vdreamer sources attach via `interrupt_policies`.
+- [x] `require_approval`
+- [x] HITL middleware `interrupt_on` → `tool_review` (was normalized as `generic` before M8: `normalize_interrupt` now recognizes the `HITLRequest` shape. The payload keeps `action_requests[]` (args redacted with the A33 defaults) and `review_configs[]`; actions = the union of allowed decisions. The gateway resumes with the middleware's own `{"decisions": [{"type": "approve"} | {"type": "edit", "edited_action": {name, args}} | {"type": "reject", "message"?} | {"type": "respond", "message"}]}`, edits validated against the tool's `args_schema`. Verified on both stream drivers.)
+- [x] MCP elicitation → `mcp_elicitation` (since M5)
+- [x] raw `interrupt()` → `generic` (the resume is now the resolver payload verbatim — `payload` if given, else `text` — per §4.5, instead of `{action, text}`)
+- [x] Policies for non-vdreamer sources attach via `interrupt_policies`. (`interrupts.apply_interrupt_policy`, applied by the worker's sink before the record and the event exist: tool-name keys (exact, then `fnmatch` globs) beat the kind key per field; `ttl_hours` restarts the clock. `validate` now requires a headless agent's `HumanInTheLoopMiddleware` reviews to get an `approver_role` from `interrupt_policies["tool_review"]`, and headless `ApprovalGate`s to name one (A16).)
 
-**Exit:** all four sources resolve through one endpoint; four-eyes and version-conflict tests pass.
+**Exit:** ✅ verified — all four sources resolve through one endpoint, end to end through the REST surface with live workers on both store backends (`tests/api/test_hitl_m8.py::test_all_four_sources_resolve_through_one_endpoint`, smoke): an `ApprovalGate` (`require_approval`), `create_agent` + `HumanInTheLoopMiddleware` (`tool_review`), an MCP elicitation, and a raw `interrupt()`. The same suite covers four-eyes (initiator refused, another `dba` approves), the version race (the second resolver gets `409`; three concurrent CAS attempts, one winner), `edit` → `422` then a valid edit written to state, `feedback → replan` re-asking, chat `reject → on_reject`, headless `reject → rejected`, `interrupt_policies` on a tool review, and the sweeper expiring an interrupt and its run (thread unlocked, `410` after). Unit tests in `tests/hitl/`. Full suite: 736 passed, 24 skipped; ruff + mypy (strict) clean; `doctor --offline` green; the M8 suites pass on the floor pins (langchain 1.4.0). Checked in a real `vdreamer dev` process: an `ApprovalGate` run → `422` on a bad edit → valid edit → `completed` with the edited state. Not run live: `PostgresAdvisoryLeader` and the Postgres `expire_overdue`/`finish` SQL (the SQLite-first testing phase — they wait for the Postgres migration with the other live-PG tests).
 
 ---
 

@@ -94,8 +94,10 @@ def test_allowed_transitions_match_prd() -> None:
             RunState.CANCELLED,
         }
     )
+    # No worker holds a waiting run: the gateway rejects it (headless reject,
+    # §4.3) and the sweeper expires it (§4.4) straight from awaiting_approval.
     assert transitions[RunState.AWAITING_APPROVAL] == frozenset(
-        {RunState.QUEUED, RunState.EXPIRED, RunState.CANCELLED}
+        {RunState.QUEUED, RunState.REJECTED, RunState.EXPIRED, RunState.CANCELLED}
     )
     for terminal in queue.TERMINAL_STATES:
         assert transitions[terminal] == frozenset()

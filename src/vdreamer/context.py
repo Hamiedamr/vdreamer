@@ -66,6 +66,9 @@ MAX_SNIPPET_CHARS = 300
 #: PRD §4.1: the default action set for ``require_approval``.
 DEFAULT_APPROVAL_ACTIONS: tuple[str, ...] = ("approve", "reject", "edit", "feedback")
 
+#: PRD §4.3: every action a resolver may take.
+APPROVAL_ACTIONS: frozenset[str] = frozenset({"approve", "reject", "edit", "feedback", "respond"})
+
 
 class FileRef(pydantic.BaseModel):
     """An inbound file: a MinIO key under ``inputs/`` (PRD §2.2, §3.5, A17).
@@ -114,6 +117,9 @@ class VDreamerContext(pydantic.BaseModel):
     roles: tuple[str, ...] = ()
     idempotency_key: str | None = None
     attempt: int = 0
+    headless: bool = False
+    """A headless run (D15): no user in the loop, so every approval must name
+    an ``approver_role`` (A16) and a ``reject`` ends the run ``rejected``."""
     pending: list[dict[str, Any]] = pydantic.Field(default_factory=list)
 
     @property
@@ -267,10 +273,11 @@ def require_approval(
     ``{kind, payload, actions, approver_role, scope, edit_schema, ttl_hours}``
 
     where ``edit_schema`` is serialized to its JSON Schema. The gateway
-    enforces the serialized policy (A15) and the resolver body (§4.3 —
-    ``{action, payload?, text?}``, ``edit`` validated against ``edit_schema``);
-    that lands with Milestone 5. Milestone 1 returns whatever the resume
-    delivers, verbatim.
+    enforces the serialized policy (A15): who may resolve (the initiator, or
+    ``approver_role``; four-eyes for ``HITL_STRICT_SCOPES``, A32), the
+    offered ``actions``, the expiry, and ``edit`` payloads against the schema
+    (``422`` otherwise). In a headless run a ``reject`` ends the run
+    ``rejected`` without resuming it (§4.3).
 
     Must be called from inside a LangGraph node — ``interrupt()`` needs the
     run config, and outside a runnable context it raises ``RuntimeError``. The
@@ -283,24 +290,54 @@ def require_approval(
         kind: renderer hint, e.g. ``"sql_review"``.
         payload: what the approver sees.
         actions: offered decisions, default ``("approve", "reject", "edit",
-            "feedback")``.
+            "feedback")``; any of ``approve|reject|edit|feedback|respond``.
         approver_role: required role for resolution; required in headless runs
-            (A16) — enforced by the gateway, Milestone 5.
+            (A16) — a headless call without one raises ``ValueError``.
         scope: capability scope, e.g. ``"db:write:prod"``.
         edit_schema: pydantic model validating ``edit`` payloads.
         ttl_hours: how long the interrupt stays resolvable before expiry.
 
     Returns:
-        Whatever the resume delivers — the gateway-built resolution.
+        The resolution ``{"action": ..., "payload"?: ..., "text"?: ...}``. An
+        ``edit`` payload has been validated against ``edit_schema`` (again,
+        here) and is its JSON dump.
+
+    Raises:
+        ValueError: an unknown or empty action set, a non-positive TTL, or a
+            headless run without ``approver_role``.
+        pydantic.ValidationError: an ``edit`` payload that fails
+            ``edit_schema`` (the gateway refuses those first).
     """
-    return interrupt(
+    offered = list(actions)
+    unknown = sorted(set(offered) - APPROVAL_ACTIONS)
+    if not offered or unknown:
+        raise ValueError(
+            f"require_approval actions must be a non-empty subset of {sorted(APPROVAL_ACTIONS)}"
+            + (f"; unknown: {unknown}" if unknown else "")
+        )
+    if ttl_hours <= 0:
+        raise ValueError("require_approval ttl_hours must be positive")
+    ctx = current_context_or_none()
+    if ctx is not None and ctx.headless and not approver_role:
+        raise ValueError(
+            f"require_approval({kind!r}) in a headless run needs an approver_role (A16)"
+        )
+    decision = interrupt(
         {
             "kind": kind,
             "payload": payload,
-            "actions": list(actions),
+            "actions": offered,
             "approver_role": approver_role,
             "scope": scope,
             "edit_schema": edit_schema.model_json_schema() if edit_schema is not None else None,
             "ttl_hours": ttl_hours,
         }
     )
+    if (
+        edit_schema is not None
+        and isinstance(decision, Mapping)
+        and decision.get("action") == "edit"
+    ):
+        edited = edit_schema.model_validate(decision.get("payload"))
+        decision = {**decision, "payload": edited.model_dump(mode="json")}
+    return decision

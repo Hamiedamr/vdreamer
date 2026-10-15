@@ -39,6 +39,16 @@ class Mode(enum.Enum):
     BOTH = "both"
 
 
+def runs_headless(agent: Any) -> bool:
+    """Whether the agent's runs are headless (D15): approvals need an
+    ``approver_role`` (A16) and a ``reject`` ends the run ``rejected`` (§4.3).
+
+    A ``HEADLESS`` agent's runs are; a ``BOTH`` agent's runs started through
+    the chat routes are not (``/trigger`` runs, Milestone 9, will be).
+    """
+    return getattr(agent, "mode", None) is Mode.HEADLESS
+
+
 @dataclass
 class BuildContext:
     """What ``BaseAgent.build()`` receives (PRD §2.2).

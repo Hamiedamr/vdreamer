@@ -38,6 +38,7 @@ from vdreamer.artifacts import ArtifactRecord, ArtifactStore, key_of
 from vdreamer.eventlog import READ_PAGE_SIZE, EventHub, EventReader, EventSink, json_text
 from vdreamer.events import EventEnvelope
 from vdreamer.interrupts import (
+    EXPIRY_BATCH,
     InMemoryInterruptStore,
     InterruptRecord,
     InterruptStatus,
@@ -266,6 +267,11 @@ class SqliteInterruptStore(InMemoryInterruptStore):
 
     async def cancel_for_run(self, run_id: str) -> int:
         return await self._tracked(super().cancel_for_run(run_id))
+
+    async def expire_overdue(
+        self, now: float | None = None, *, limit: int = EXPIRY_BATCH
+    ) -> list[InterruptRecord]:
+        return await self._tracked(super().expire_overdue(now, limit=limit))
 
 
 class SqliteEventLog(EventSink, EventReader):

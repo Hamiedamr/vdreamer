@@ -6,31 +6,40 @@ role". A caller who can neither resolve nor initiated the run does not see the
 record at all (``404``); the initiator of a role-gated interrupt sees it but
 gets ``403 forbidden_role`` on resolve.
 
-Resolution, in order: visibility (``404``) → authority (``403``) → expiry
-(``410``, lazily — even before the M8 sweeper marks it) → still pending and
-``expected_version`` current (``409``; A12, the first resolver wins) → the
-body against the record's ``actions`` (``422``) → the compare-and-swap →
-``interrupt.resolved`` → once the run has no pending interrupt left, the
-resume map ``{interrupt_id: value}`` is planted on the run and it is requeued
-("resolution enqueues a resume", §3.2).
+Resolution, in order: visibility (``404``) → authority (``403``: the role,
+else the initiator; four-eyes under a ``HITL_STRICT_SCOPES`` scope, A32) →
+expiry (``410``, lazily — even before the sweeper marks it) → still pending
+and ``expected_version`` current (``409``; A12, the first resolver wins) → the
+body against the record (``422``: offered actions, ``edit`` payloads against
+``edit_schema``) → the compare-and-swap → ``interrupt.resolved`` → then either
 
-Milestone 8 completes the policy: ``edit_schema`` validation, four-eyes
-(``HITL_STRICT_SCOPES``, A32), the expiry sweeper, headless ``reject →
-rejected``, and the ``interrupt_policies`` of non-vdreamer sources.
+- a headless ``reject`` of an approval ends the run ``rejected`` (§4.3), or
+- once the run has no pending interrupt left, the resume map
+  ``{interrupt_id: value}`` is planted on the run and it is requeued
+  ("resolution enqueues a resume", §3.2).
+
+The resume value is built per source (§4.5, A44): ``{action, payload?,
+text?}`` for ``require_approval``; ``{"decisions": [...]}`` in the
+``HumanInTheLoopMiddleware`` shape for ``tool_review``; ``{"responses":
+{...}}`` for an MCP elicitation; the resolver payload verbatim for a raw
+``interrupt()``.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 from typing import Annotated, Any
 
+import jsonschema
 from fastapi import APIRouter, Depends, Query
 
+from vdreamer.agents import runs_headless
 from vdreamer.events import EventEnvelope, EventType, InterruptResolvedPayload
 from vdreamer.gateway.auth import API_PREFIX, Identity, current_identity
 from vdreamer.gateway.backend import GatewayBackend
-from vdreamer.gateway.common import get_backend, iso, iso_required, jsonable
+from vdreamer.gateway.common import get_backend, get_settings, iso, iso_required, jsonable
 from vdreamer.gateway.errors import ApiError, ErrorCode
 from vdreamer.gateway.schemas import (
     Decision,
@@ -39,21 +48,28 @@ from vdreamer.gateway.schemas import (
     InterruptOut,
     ResolveRequest,
 )
+from vdreamer.gateway.settings import GatewaySettings
 from vdreamer.interrupts import (
+    GENERIC_KIND,
+    MCP_ELICITATION_KIND,
+    POLICY_KINDS,
+    TOOL_REVIEW_KIND,
     InterruptConflict,
     InterruptRecord,
     InterruptStatus,
     Viewer,
+    end_waiting_run,
+    is_strict_scope,
     visible_to,
 )
-from vdreamer.queue import InvalidTransition
-from vdreamer.streaming import MCP_ELICITATION_KIND
+from vdreamer.queue import InvalidTransition, RunState
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix=API_PREFIX, tags=["interrupts"])
 
 Backend = Annotated[GatewayBackend, Depends(get_backend)]
+Settings = Annotated[GatewaySettings, Depends(get_settings)]
 Caller = Annotated[Identity, Depends(current_identity)]
 
 _E = {"model": ErrorResponse}
@@ -139,6 +155,48 @@ async def get_interrupt(interrupt_id: str, backend: Backend, caller: Caller) -> 
     return interrupt_out(await _visible_or_404(backend, interrupt_id, caller))
 
 
+def _schema_errors(schema: Mapping[str, Any], instance: Any) -> list[dict[str, Any]]:
+    """``instance`` against a JSON Schema (an ``edit_schema``, a tool's ``args_schema``).
+
+    An unusable schema refuses every edit: the gateway enforces the policy it
+    was given (A15), it never skips it.
+    """
+    schema = dict(schema)
+    validator_cls = jsonschema.validators.validator_for(
+        schema, default=jsonschema.Draft202012Validator
+    )
+    try:
+        validator_cls.check_schema(schema)
+    except jsonschema.SchemaError:
+        _log.warning("interrupt edit_schema is not a valid JSON Schema; refusing the edit")
+        return [{"loc": [], "msg": "the interrupt's edit_schema is not a valid JSON Schema"}]
+    errors = sorted(
+        validator_cls(schema).iter_errors(instance), key=lambda error: list(error.absolute_path)
+    )
+    return [
+        {"loc": list(error.absolute_path), "msg": error.message}
+        for error in errors[:MAX_EDIT_ERRORS]
+    ]
+
+
+#: How many schema errors a ``422 invalid_edit`` lists.
+MAX_EDIT_ERRORS = 20
+
+
+def _check_edit(schema: Mapping[str, Any] | None, payload: Any) -> None:
+    """§4.3: an ``edit`` payload must validate against the schema → else ``422``."""
+    if schema is None:
+        return
+    errors = _schema_errors(schema, payload)
+    if errors:
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_EDIT,
+            "the edit payload does not match the interrupt's edit_schema",
+            {"errors": errors},
+        )
+
+
 def _decision_value(decision: Decision, record: InterruptRecord) -> dict[str, Any]:
     """Validate one decision against the record and build its resume entry (§4.3)."""
     if decision.action not in record.actions:
@@ -148,8 +206,10 @@ def _decision_value(decision: Decision, record: InterruptRecord) -> dict[str, An
             f"action {decision.action!r} is not offered by this interrupt",
             {"actions": list(record.actions)},
         )
-    if decision.action == "edit" and decision.payload is None:
-        raise ApiError(422, ErrorCode.INVALID_EDIT, "an 'edit' resolution needs a payload")
+    if decision.action == "edit":
+        if decision.payload is None:
+            raise ApiError(422, ErrorCode.INVALID_EDIT, "an 'edit' resolution needs a payload")
+        _check_edit(record.edit_schema, decision.payload)
     if decision.action in _TEXT_ACTIONS and not (decision.text or "").strip():
         raise ApiError(
             422, ErrorCode.INVALID_REQUEST, f"a {decision.action!r} resolution needs text"
@@ -195,10 +255,108 @@ def _elicitation_resume(decision: Decision, record: InterruptRecord) -> dict[str
     return {"responses": responses}
 
 
-def _resume_value(body: ResolveRequest, record: InterruptRecord) -> dict[str, Any]:
-    """The resume value the gateway builds (§4.5): ``{action, payload?, text?}``,
-    ``{"decisions": [...]}`` in action order, or an MCP elicitation's
-    ``{"responses": {...}}``."""
+def _review_decision(
+    decision: Decision, request: Mapping[str, Any], config: Mapping[str, Any] | None, index: int
+) -> dict[str, Any]:
+    """One ``HumanInTheLoopMiddleware`` decision for one action request (§4.5)."""
+    allowed = [str(item) for item in (config or {}).get("allowed_decisions") or ()]
+    if decision.action not in allowed:
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_ACTION,
+            f"decision {index}: {decision.action!r} is not allowed for "
+            f"{request.get('name')!r}",
+            {"index": index, "allowed_decisions": allowed},
+        )
+    if decision.action == "approve":
+        return {"type": "approve"}
+    if decision.action == "edit":
+        if decision.payload is None:
+            raise ApiError(
+                422,
+                ErrorCode.INVALID_EDIT,
+                f"decision {index}: an 'edit' needs the edited args as its payload",
+            )
+        args_schema = (config or {}).get("args_schema")
+        _check_edit(args_schema if isinstance(args_schema, Mapping) else None, decision.payload)
+        return {
+            "type": "edit",
+            "edited_action": {"name": str(request.get("name")), "args": decision.payload},
+        }
+    if decision.action == "respond":
+        if not (decision.text or "").strip():
+            raise ApiError(
+                422, ErrorCode.INVALID_REQUEST, f"decision {index}: a 'respond' needs text"
+            )
+        return {"type": "respond", "message": decision.text}
+    value: dict[str, Any] = {"type": "reject"}
+    if decision.text:
+        value["message"] = decision.text
+    return value
+
+
+def _tool_review_resume(body: ResolveRequest, record: InterruptRecord) -> dict[str, Any]:
+    """``HumanInTheLoopMiddleware`` (§4.5): ``{"decisions": [...]}`` in request order.
+
+    One decision per action request; a review of a single call may also use
+    the ``{action, payload?, text?}`` form. ``edit`` payloads are the edited
+    args, validated against the tool's ``args_schema`` when it has one.
+    """
+    raw_requests = record.payload.get("action_requests")
+    requests = [r for r in raw_requests or [] if isinstance(r, Mapping)]
+    configs = {
+        str(config.get("action_name")): config
+        for config in record.payload.get("review_configs") or []
+        if isinstance(config, Mapping)
+    }
+    decisions = (
+        body.decisions
+        if body.decisions is not None
+        else [Decision(action=str(body.action), payload=body.payload, text=body.text)]
+    )
+    if len(decisions) != len(requests):
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_REQUEST,
+            f"send one decision per action request ({len(requests)}), in order",
+            {"action_requests": len(requests)},
+        )
+    return {
+        "decisions": [
+            _review_decision(decision, request, configs.get(str(request.get("name"))), index)
+            for index, (decision, request) in enumerate(zip(decisions, requests, strict=True))
+        ]
+    }
+
+
+def _generic_resume(body: ResolveRequest, record: InterruptRecord) -> Any:
+    """A raw ``interrupt(value)`` (§4.5): the resolver payload, verbatim.
+
+    ``respond`` with a ``payload`` resumes with that object; with only
+    ``text``, with the text.
+    """
+    if body.decisions is not None or body.action not in record.actions:
+        raise ApiError(
+            422,
+            ErrorCode.INVALID_ACTION,
+            "a generic interrupt takes one 'respond' resolution",
+            {"actions": list(record.actions)},
+        )
+    if body.payload is not None:
+        return body.payload
+    if not (body.text or "").strip():
+        raise ApiError(
+            422, ErrorCode.INVALID_REQUEST, "a 'respond' resolution needs a payload or text"
+        )
+    return body.text
+
+
+def _resume_value(body: ResolveRequest, record: InterruptRecord) -> Any:
+    """The resume value the gateway builds, per source (§4.5)."""
+    if record.kind == TOOL_REVIEW_KIND:
+        return _tool_review_resume(body, record)
+    if record.kind == GENERIC_KIND:
+        return _generic_resume(body, record)
     if record.kind == MCP_ELICITATION_KIND and body.action is not None:
         decision = Decision(action=body.action, payload=body.payload, text=body.text)
         _decision_value(decision, record)  # action offered, edit has a payload
@@ -211,16 +369,9 @@ def _resume_value(body: ResolveRequest, record: InterruptRecord) -> dict[str, An
     )
 
 
-@router.post(
-    "/interrupts/{interrupt_id}/resolve",
-    response_model=InterruptOut,
-    responses={400: _E, 401: _E, 403: _E, 404: _E, 409: _E, 410: _E, 422: _E},
-)
-async def resolve_interrupt(
-    interrupt_id: str, body: ResolveRequest, backend: Backend, caller: Caller
-) -> InterruptOut:
-    """Resolve (§4.3): ``200`` | ``403 forbidden_role`` | ``409`` stale | ``410`` | ``422``."""
-    record = await _visible_or_404(backend, interrupt_id, caller)
+def _check_authority(record: InterruptRecord, caller: Identity, settings: GatewaySettings) -> None:
+    """§4.3 authority (``403 forbidden_role``): the approver role, else the
+    initiator; under a ``HITL_STRICT_SCOPES`` scope, never the initiator (A32)."""
     if not can_resolve(record, caller):
         raise ApiError(
             403,
@@ -232,6 +383,45 @@ async def resolve_interrupt(
             ),
             {"approver_role": record.approver_role} if record.approver_role else None,
         )
+    if (
+        is_strict_scope(record.scope, settings.strict_scopes)
+        and record.initiator_id is not None
+        and record.initiator_id == caller.user_id
+    ):
+        raise ApiError(
+            403,
+            ErrorCode.FORBIDDEN_ROLE,
+            f"scope {record.scope!r} needs four eyes: the run's initiator may not approve it",
+            {"reason": "four_eyes", "scope": record.scope},
+        )
+
+
+def _ends_run_rejected(
+    backend: GatewayBackend, record: InterruptRecord, body: ResolveRequest
+) -> bool:
+    """§4.3: a headless ``reject`` of an approval ends the run ``rejected``.
+
+    Approvals are ``require_approval`` interrupts (incl. ``ApprovalGate`` and
+    per-tool gates). A tool review's ``reject`` is the middleware's own
+    decision (the model is told) and an elicitation's is a decline: those resume.
+    """
+    if body.action != "reject" or record.kind in POLICY_KINDS:
+        return False
+    agent = backend.agents.get(record.agent)
+    return agent is not None and runs_headless(agent)
+
+
+@router.post(
+    "/interrupts/{interrupt_id}/resolve",
+    response_model=InterruptOut,
+    responses={400: _E, 401: _E, 403: _E, 404: _E, 409: _E, 410: _E, 422: _E},
+)
+async def resolve_interrupt(
+    interrupt_id: str, body: ResolveRequest, backend: Backend, settings: Settings, caller: Caller
+) -> InterruptOut:
+    """Resolve (§4.3): ``200`` | ``403 forbidden_role`` | ``409`` stale | ``410`` | ``422``."""
+    record = await _visible_or_404(backend, interrupt_id, caller)
+    _check_authority(record, caller, settings)
     if record.status is InterruptStatus.EXPIRED or (
         record.status is InterruptStatus.PENDING and record.is_expired(time.time())
     ):
@@ -292,7 +482,14 @@ async def resolve_interrupt(
             ).event_payload(),
         )
     )
-    await _resume_when_settled(backend, resolved.run_id)
+    if _ends_run_rejected(backend, resolved, body):
+        run = await backend.queue.get(resolved.run_id)
+        if run is not None:
+            await end_waiting_run(
+                backend.queue, backend.interrupts, backend.event_writer, run, RunState.REJECTED
+            )
+    else:
+        await _resume_when_settled(backend, resolved.run_id)
     return interrupt_out(resolved)
 
 

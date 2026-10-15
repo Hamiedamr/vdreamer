@@ -88,11 +88,11 @@ from vdreamer.events import (
     ToolCallPayload,
     ToolResultPayload,
 )
-from vdreamer.tools import redact_args
 
-#: The §4.5 kind of an MCP elicitation interrupt (``langchain.mcp``'s own
-#: discriminator, ``ELICITATION_INTERRUPT_TYPE``, rides the value's ``type``).
-MCP_ELICITATION_KIND: Final[str] = "mcp_elicitation"
+# The §4.5 kinds live with the record; re-exported here, where interrupts normalize.
+from vdreamer.interrupts import MCP_ELICITATION_KIND as MCP_ELICITATION_KIND
+from vdreamer.interrupts import TOOL_REVIEW_KIND as TOOL_REVIEW_KIND
+from vdreamer.tools import redact_args
 
 #: Selects the stream driver (PRD §2.4, A43): ``v2`` (default, stable) or ``v3`` (beta).
 STREAM_DRIVER_ENV_VAR: Final[str] = "VDREAMER_STREAM_DRIVER"
@@ -345,6 +345,12 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
     action ``"respond"`` (§4.5 table); the resolver payload rides the
     ``payload`` field verbatim.
     """
+    if (
+        isinstance(value, Mapping)
+        and isinstance(value.get("action_requests"), Sequence)
+        and isinstance(value.get("review_configs"), Sequence)
+    ):
+        return _normalize_tool_review(value, interrupt_id)
     if isinstance(value, Mapping) and value.get("type") == MCP_ELICITATION_KIND:
         # langchain.mcp elicitation (§4.5): answered with edit (the form
         # answers) or reject (decline); the gateway builds {"responses": ...}.
@@ -396,6 +402,45 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
         kind="generic",
         actions=["respond"],
         payload={"value": value},
+    )
+
+
+def _normalize_tool_review(
+    value: Mapping[str, Any], interrupt_id: str
+) -> InterruptRequestedPayload:
+    """``HumanInTheLoopMiddleware``'s ``HITLRequest`` → kind ``tool_review`` (§4.5).
+
+    The payload keeps the request's shape — ``action_requests[]`` (each call's
+    ``name``/``args``/``description``, args redacted with the A33 defaults: the
+    approver judges the call, an ``approve`` runs the model's own) and
+    ``review_configs[]`` (each tool's ``allowed_decisions``, ``args_schema``).
+    ``actions`` is the union of the allowed decisions, in first-seen order; the
+    gateway checks each decision against its own request's list and builds
+    ``{"decisions": [...]}`` in request order.
+    """
+    requests = [
+        {
+            **dict(request),
+            "args": redact_args(dict(request.get("args") or {})),
+        }
+        for request in value["action_requests"]
+        if isinstance(request, Mapping)
+    ]
+    configs = [dict(config) for config in value["review_configs"] if isinstance(config, Mapping)]
+    allowed = {
+        str(config.get("action_name")): config.get("allowed_decisions") for config in configs
+    }
+    actions: list[str] = []
+    for request in requests:
+        for decision in allowed.get(str(request.get("name"))) or ():
+            if str(decision) not in actions:
+                actions.append(str(decision))
+    return InterruptRequestedPayload(
+        interrupt_id=interrupt_id,
+        kind=TOOL_REVIEW_KIND,
+        actions=actions or ["approve", "reject"],
+        payload={"action_requests": requests, "review_configs": configs},
+        expires_at=(datetime.now(UTC) + timedelta(hours=24)).isoformat(),
     )
 
 

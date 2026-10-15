@@ -287,7 +287,7 @@ def test_resume_waits_for_every_pending_interrupt(client: TestClient, stack: Sta
     assert run is not None and run.status is RunState.QUEUED
     assert run.resume == {
         first.interrupt_id: {"action": "approve"},
-        "int_second": {"action": "respond", "text": "ok"},
+        "int_second": "ok",  # a raw interrupt() resumes with the answer verbatim (§4.5)
     }
 
 

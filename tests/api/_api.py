@@ -24,6 +24,7 @@ from typing import Any, TypedDict
 
 import aiosqlite
 import pydantic
+from _hitl_agents import hitl_agents
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -52,6 +53,8 @@ from vdreamer.threads import InMemoryThreadStore
 from vdreamer.worker import Worker
 
 TOKEN = "current-internal-token-0123456789"
+#: ``HITL_STRICT_SCOPES`` of every kit gateway (A32): ``strict``'s scope matches.
+STRICT_SCOPES = ("db:write:*",)
 PREVIOUS_TOKEN = "previous-internal-token-012345678"
 
 
@@ -382,6 +385,7 @@ def all_agents() -> dict[str, BaseAgent]:
         ReportsAgent(),
         ReviewedAgent(),
         UnpackAgent(),
+        *hitl_agents(),
     ]
     return {agent.name: agent for agent in agents}
 
@@ -479,7 +483,9 @@ def make_stack(
 
     app = create_app(
         backend,
-        GatewaySettings(tokens=(TOKEN, PREVIOUS_TOKEN), heartbeat_s=heartbeat_s),
+        GatewaySettings(
+            tokens=(TOKEN, PREVIOUS_TOKEN), heartbeat_s=heartbeat_s, strict_scopes=STRICT_SCOPES
+        ),
         lifespan=lifespan,
     )
     return Stack(app, backend, queue, log, threads, interrupts, artifacts, checkpointer, db)

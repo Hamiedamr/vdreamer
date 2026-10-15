@@ -46,13 +46,23 @@ class GatewayConfigError(RuntimeError):
     """The gateway's configuration is missing or unsafe."""
 
 
+#: Four-eyes scopes (A32): comma-separated ``fnmatch`` patterns, e.g. ``db:write:*``.
+STRICT_SCOPES_ENV_VAR: Final[str] = "HITL_STRICT_SCOPES"
+
+
 @dataclass(frozen=True)
 class GatewaySettings:
-    """Runtime settings the app is built with."""
+    """Runtime settings the app is built with.
+
+    ``strict_scopes`` are the ``HITL_STRICT_SCOPES`` patterns (A32): an
+    interrupt whose ``scope`` matches one needs an approver who is not the run's
+    initiator.
+    """
 
     tokens: tuple[str, ...]
     heartbeat_s: float = HEARTBEAT_INTERVAL_S
     artifact_read_all_role: str = ARTIFACT_READ_ALL_ROLE
+    strict_scopes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.tokens:
@@ -76,6 +86,12 @@ def tokens_from_env() -> tuple[str, ...]:
         )
     previous = os.environ.get(PREVIOUS_TOKEN_ENV_VAR, "").strip()
     return (current, previous) if previous and previous != current else (current,)
+
+
+def strict_scopes_from_env() -> tuple[str, ...]:
+    """The four-eyes scope patterns from ``HITL_STRICT_SCOPES`` (A32); empty when unset."""
+    raw = os.environ.get(STRICT_SCOPES_ENV_VAR, "")
+    return tuple(pattern.strip() for pattern in raw.split(",") if pattern.strip())
 
 
 def validate_bind_host(host: str) -> str:
