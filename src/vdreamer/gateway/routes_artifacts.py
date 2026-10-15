@@ -1,11 +1,11 @@
-"""The artifact proxy (PRD §2.5, §3.4, A8, A9, A13, A25).
+"""The artifact proxy.
 
-The gateway proxies artifact bytes (A8) so URLs stay same-origin behind the
-Web Backend (A25). Access: the owner of the artifact's thread, an approver
+The gateway proxies artifact bytes so URLs stay same-origin behind the
+Web Backend. Access: the owner of the artifact's thread, an approver
 granted one of that run's interrupts (its ``approver_role`` holder), or a
-holder of ``artifact:read:all`` (A8). An artifact the caller may not read is
+holder of ``artifact:read:all``. An artifact the caller may not read is
 a ``404``, like any other owner-scoped resource. A record whose object is
-gone (30-day lifecycle, A9) answers ``410 artifact_expired``.
+gone (30-day lifecycle) answers ``410 artifact_expired``.
 
 - ``/preview`` — the stored preview; for tables a page of rows,
   ``?offset&limit&sort`` (``limit ≤ 1000``; ``sort=col`` or ``-col``, comma
@@ -13,7 +13,7 @@ gone (30-day lifecycle, A9) answers ``410 artifact_expired``.
 - ``/raw`` — the bytes inline under their own media type. HTML has its
   ``artifact://{id}`` links rewritten to ``/raw`` URLs and is served under a
   CSP allowing no external origin and ``connect-src 'none'``; chart JS is
-  vendored at ``/static/vendor/`` (A13).
+  vendored at ``/static/vendor/``.
 - ``/download`` — the bytes as an attachment; tables convert while streaming
   with ``?format=csv|xlsx|parquet`` (XLSX beyond 1,048,575 rows → ``422``).
 """
@@ -53,16 +53,16 @@ Caller = Annotated[Identity, Depends(current_identity)]
 
 _E = {"model": ErrorResponse}
 
-#: Served with every ``html`` artifact (§3.4): no external origin, ``connect-src
+#: Served with every ``html`` artifact: no external origin, ``connect-src
 #: 'none'``. Inline script/style stay allowed — report HTML embeds its charts —
-#: and clients frame it ``sandbox="allow-scripts"`` without same-origin (§6.3).
+#: and clients frame it ``sandbox="allow-scripts"`` without same-origin.
 HTML_ARTIFACT_CSP: Final[str] = (
     "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; "
     "frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
 )
 
-#: ``/preview`` page bound (§3.4: ``limit ≤ 1000``).
+#: ``/preview`` page bound (``limit ≤ 1000``).
 MAX_PREVIEW_LIMIT: Final[int] = 1000
 
 #: ``artifact://{id}`` references inside HTML artifacts.
@@ -100,7 +100,7 @@ def _expired(record: ArtifactRecord) -> ApiError:
     return ApiError(
         410,
         ErrorCode.ARTIFACT_EXPIRED,
-        f"artifact {record.artifact_id!r} is no longer stored (retention, A9)",
+        f"artifact {record.artifact_id!r} is no longer stored (retention)",
     )
 
 
@@ -155,7 +155,7 @@ def _content_disposition(disposition: str, filename: str) -> str:
 
 
 def rewrite_artifact_links(text: str) -> str:
-    """``artifact://{id}`` → ``/api/v1/artifacts/{id}/raw`` (§3.4)."""
+    """``artifact://{id}`` → ``/api/v1/artifacts/{id}/raw``."""
     return _ARTIFACT_LINK.sub(
         lambda match: f"{ARTIFACT_API_PREFIX}/artifacts/{match.group(1)}/raw", text
     )
@@ -181,7 +181,7 @@ def _file_response(
 async def get_artifact(
     artifact_id: str, backend: Backend, settings: Settings, caller: Caller
 ) -> ArtifactOut:
-    """The artifact's metadata — the ``artifact.created`` field set (§3.4)."""
+    """The artifact's metadata — the ``artifact.created`` field set."""
     record = await _readable_or_404(backend, settings, artifact_id, caller)
     view_url, download_url = artifact_urls(record.artifact_id)
     return ArtifactOut(
@@ -214,7 +214,7 @@ async def preview_artifact(
     limit: Annotated[int, Query(ge=1, le=MAX_PREVIEW_LIMIT)] = 100,
     sort: Annotated[str | None, Query(max_length=1000)] = None,
 ) -> ArtifactPreview:
-    """The stored preview (§3.4); tables also return one page of rows."""
+    """The stored preview; tables also return one page of rows."""
     record = await _readable_or_404(backend, settings, artifact_id, caller)
     base = ArtifactPreview(
         artifact_id=record.artifact_id,
@@ -247,7 +247,7 @@ async def preview_artifact(
 async def raw_artifact(
     artifact_id: str, backend: Backend, settings: Settings, caller: Caller
 ) -> Response:
-    """The bytes, inline, as their own media type; HTML rewritten and under the §3.4 CSP."""
+    """The bytes, inline, as their own media type; HTML rewritten and under the artifact CSP."""
     record = await _readable_or_404(backend, settings, artifact_id, caller)
     headers = {
         "Content-Disposition": _content_disposition("inline", _filename(record)),

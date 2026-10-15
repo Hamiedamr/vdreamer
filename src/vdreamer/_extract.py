@@ -1,4 +1,4 @@
-"""The ``safe_extract`` engine (PRD §3.5, A34 — security-critical).
+"""The ``safe_extract`` engine (security-critical).
 
 Runs as ``python -I -m vdreamer._extract SPEC.json`` in a sandboxed child
 (rlimits, dedicated uid, no network — see ``vdreamer.sandbox``), so the
@@ -15,7 +15,7 @@ What it guarantees, for one ZIP archive:
   ``max_ratio`` × its compressed size; and on a corrupt or unsupported
   member. Sizes are counted while inflating — declared sizes are not trusted.
 - **Decodes names** UTF-8 when the archive flags them so; otherwise tries
-  UTF-8, then CP437, then CP1256 (Arabic Windows), as PRD §3.5 orders them.
+  UTF-8, then CP437, then CP1256 (Arabic Windows), as orders them.
   CP437 decodes any byte string, so it only wins when every non-ASCII byte is
   one of its accented letters (0x80–0xAF); box-drawing and Greek ranges mean
   the name was CP1256.
@@ -53,7 +53,7 @@ _DRIVE: Final = re.compile(r"^[A-Za-z]:")
 
 @dataclass(frozen=True)
 class ExtractLimits:
-    """The A34 caps. Defaults suit a site-survey ZIP of photos and PDFs."""
+    """The caps. Defaults suit a site-survey ZIP of photos and PDFs."""
 
     max_total_bytes: int = 1024 * 1024 * 1024
     max_file_bytes: int = 256 * 1024 * 1024
@@ -78,7 +78,7 @@ class UnsafeArchive(Exception):
 
 
 def decode_name(info: zipfile.ZipInfo) -> str:
-    """The entry name per §3.5: flagged UTF-8, else UTF-8 → CP437 → CP1256."""
+    """The entry name: flagged UTF-8, else UTF-8 → CP437 → CP1256."""
     if info.flag_bits & 0x800:
         return info.filename
     try:

@@ -40,9 +40,9 @@ To run one, make it importable (the workspace members are installed by `uv sync`
 
 ## CI
 
-`.github/workflows/ci.yml` runs on Python 3.11:
+`.github/workflows/ci.yml` runs on Python 3.11 (`locked` also on 3.12):
 
-- `locked` — lockfile check, ruff, mypy and the full suite against the committed lock.
+- `locked` — lockfile check, ruff, mypy and the full suite against the committed lock, on 3.11 and 3.12.
 - `floor` / `latest` — smoke and acceptance tests against the minimum supported pins (`uv lock --resolution lowest-direct`) and the latest 1.x minors (`uv lock --upgrade`); neither lock is committed.
 - `uv-independence` — builds the wheel and installs it with plain `pip` into a clean venv.
 - `zero-egress` — `doctor --offline` with its socket guard.

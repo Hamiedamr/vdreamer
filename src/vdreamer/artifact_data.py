@@ -1,4 +1,4 @@
-"""Per-kind artifact encoding and previews (PRD §3.4).
+"""Per-kind artifact encoding and previews.
 
 - ``table`` — ``pyarrow.Table``, ``pandas.DataFrame``, or an iterable of row
   mappings → Parquet; preview: schema + 10 rows + ``row_count``.
@@ -35,7 +35,7 @@ import pydantic
 
 from vdreamer import tables
 
-#: §3.4: ``json`` artifacts hold at most 1 MB; the preview carries ≤ 64 KB bodies.
+#: ``json`` artifacts hold at most 1 MB; the preview carries ≤ 64 KB bodies.
 JSON_MAX_BYTES: Final = 1024 * 1024
 JSON_PREVIEW_MAX_BYTES: Final = 64 * 1024
 HTML_TITLE_MAX_CHARS: Final = 200
@@ -171,7 +171,7 @@ def image_info(data: bytes) -> tuple[str, int | None, int | None]:
     if _SVG_START.match(data[:4096]):
         width, height = _svg_size(data)
         return "image/svg+xml", width, height
-    raise TypeError("image data must be PNG, JPEG, or SVG (no auto-detection, §3.4)")
+    raise TypeError("image data must be PNG, JPEG, or SVG (no auto-detection)")
 
 
 # -- html -------------------------------------------------------------------
@@ -201,7 +201,7 @@ def html_preview(text: str, fallback_title: str) -> dict[str, Any]:
 
 
 def json_preview(body: Any, size: int) -> dict[str, Any]:
-    """§3.4: the full body when it is ≤ 64 KB, else only that it was cut."""
+    """The full body when it is ≤ 64 KB, else only that it was cut."""
     return {"body": body} if size <= JSON_PREVIEW_MAX_BYTES else {"truncated": True}
 
 

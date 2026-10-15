@@ -28,3 +28,6 @@ docs/.PRD.md.un~
 
 # vdreamer dev state (the default --db, ./.vdreamer/dev.db, and its objects)
 .vdreamer/
+
+# local settings read by every vdreamer command (tokens, keys)
+.env

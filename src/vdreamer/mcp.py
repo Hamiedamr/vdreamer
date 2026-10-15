@@ -1,8 +1,8 @@
-"""MCP servers as governed tool sources (PRD §2.7, A38–A40; Milestone 5).
+"""MCP servers as governed tool sources.
 
 The one module that touches ``langchain.mcp`` (beta, version-pinned through
-the ``mcp`` extra, A38) and FastMCP. Servers are ``type: mcp`` entries in
-``resources.yaml`` (A39):
+the ``mcp`` extra) and FastMCP. Servers are ``type: mcp`` entries in
+``resources.yaml``:
 
 .. code-block:: yaml
 
@@ -25,8 +25,8 @@ the ``mcp`` extra, A38) and FastMCP. Servers are ``type: mcp`` entries in
   disappear) and logged. Both are retried on the refresh interval.
 - **Elicitation** — ``MCPAdapter`` answers a server's input request with a
   LangGraph ``interrupt()``; ``streaming.normalize_interrupt`` maps it onto
-  kind ``mcp_elicitation`` (§4.5).
-- **Network rules (A40)** — ``NETWORK_ALLOWLIST`` is checked at config load
+  kind ``mcp_elicitation``.
+- **Network rules** — ``NETWORK_ALLOWLIST`` is checked at config load
   *and* again at connect (with DNS resolution); a stdio ``command`` must be an
   absolute path to an installed binary, never a launcher that fetches
   packages (``npx``, ``uvx``, ``pip``, …); on POSIX the server runs under
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-#: Launchers that fetch and run packages at call time (A40): never allowed.
+#: Launchers that fetch and run packages at call time: never allowed.
 REJECTED_LAUNCHERS: Final = frozenset(
     {"npx", "uvx", "uv", "pip", "pip3", "pipx", "npm", "pnpm", "pnpx", "yarn", "bunx", "bun"}
 )
@@ -98,7 +98,7 @@ _LIMIT_KEYS: Final = frozenset({"memory_mb", "cpu_s", "fsize_mb", "nofile"})
 
 
 class MCPConfigError(ResourcesError):
-    """A ``type: mcp`` entry breaks a rule (shape, A23 secrets, A40 network)."""
+    """A ``type: mcp`` entry breaks a rule (shape, secrets, network)."""
 
 
 class MCPUnavailable(EndpointUnavailable):
@@ -167,7 +167,7 @@ def _launcher_name(command: str) -> str:
 
 
 def check_stdio_command(name: str, command: str, args: Sequence[str]) -> None:
-    """A40: an absolute path to an installed binary, never a package launcher."""
+    """An absolute path to an installed binary, never a package launcher."""
     if not os.path.isabs(command):
         raise MCPConfigError(
             f"MCP server {name!r}: command {command!r} must be an absolute path to a "
@@ -183,7 +183,7 @@ def check_stdio_command(name: str, command: str, args: Sequence[str]) -> None:
     if launcher in REJECTED_LAUNCHERS or module_launch:
         raise MCPConfigError(
             f"MCP server {name!r}: {command!r} fetches packages at runtime; install the "
-            "server ahead of time and point command at its binary (A40)"
+            "server ahead of time and point command at its binary"
         )
     if not Path(command).is_file():
         raise MCPConfigError(f"MCP server {name!r}: command {command!r} does not exist")
@@ -195,7 +195,7 @@ def _check_url(name: str, url: str, allowlist: NetworkAllowlist | None) -> None:
         raise MCPConfigError(f"MCP server {name!r}: url {url!r} must be an http(s) URL")
     if parsed.username or parsed.password:
         raise MCPConfigError(
-            f"MCP server {name!r}: credentials in the url put a secret in YAML (A23); "
+            f"MCP server {name!r}: credentials in the url put a secret in YAML; "
             "use bearer_env"
         )
     if allowlist is not None:
@@ -231,7 +231,7 @@ def _limits(name: str, value: Any) -> MCPLimits:
 def parse_server(
     name: str, entry: Mapping[str, Any], *, allowlist: NetworkAllowlist | None = None
 ) -> MCPServerConfig:
-    """Validate one ``type: mcp`` entry (shape, A23, A40)."""
+    """Validate one ``type: mcp`` entry (shape)."""
     entry = check_entry(name, entry)
     if not _SERVER_NAME_RE.fullmatch(name):
         raise MCPConfigError(
@@ -319,7 +319,7 @@ def mcp_servers_from_resources(
 
 def _import_adapter() -> Any:
     """``langchain.mcp`` — the ``mcp`` extra, imported on first use (beta warning muted)."""
-    os.environ.setdefault("FASTMCP_CHECK_FOR_UPDATES", "off")  # zero egress (§5.2)
+    os.environ.setdefault("FASTMCP_CHECK_FOR_UPDATES", "off")  # zero egress
     try:
         from langchain_core._api import LangChainBetaWarning
 
@@ -338,7 +338,7 @@ def _stdio_launch(config: MCPServerConfig) -> tuple[str, list[str], dict[str, st
     assert config.command is not None
     env = dict(config.env)
     if sys.platform == "win32":
-        # No rlimits on Windows (dev hosts only, D19); the MCP SDK merges its
+        # No rlimits on Windows (dev hosts only); the MCP SDK merges its
         # default environment, which carries what Windows binaries need.
         return config.command, list(config.args), env
     launcher = str(Path(__file__).with_name("_mcp_launch.py"))
@@ -505,7 +505,7 @@ def _digest(value: Any) -> str:
 
 
 class MCPRegistry:
-    """Every configured server for one worker (PRD §2.7).
+    """Every configured server for one worker.
 
     :meth:`start` connects each server and discovers its tools (concurrently);
     :meth:`run_refresh` re-discovers on each server's ``refresh_s`` until
@@ -553,7 +553,7 @@ class MCPRegistry:
         return entry.tools(include)
 
     def snapshot_hash(self) -> str:
-        """Changes whenever any server's discovered tool set does (§2.7)."""
+        """Changes whenever any server's discovered tool set does."""
         return _digest({name: server.digest for name, server in sorted(self._servers.items())})
 
     def probes(self) -> dict[str, Callable[[], Awaitable[None]]]:

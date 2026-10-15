@@ -1,17 +1,17 @@
 """Protocol v1.0 events: constants, event types, the envelope, payload models.
 
-PRD §3.3 (Event Log & Protocol) is the contract: every wire event is one
+The protocol contract: every wire event is one
 ``EventEnvelope`` whose ``type`` selects one of the twelve protocol event types
-and whose ``payload`` matches the per-type shapes in the §3.3 table. The
+and whose ``payload`` matches the per-type shapes in the table. The
 envelope field for the protocol version is literally ``"v"``
-(``{"v":"1.0", ...}``); clients send ``X-Protocol-Version: 1`` (§6.1).
+(``{"v":"1.0", ...}``); clients send ``X-Protocol-Version: 1``.
 ``PROTOCOL_VERSION`` and ``PROTOCOL_VERSION_HEADER`` are the single source of
 both.
 
-Milestone 2 scope (WP1): this module is the protocol *core* — constants, the
+scope: this module is the protocol *core* — constants, the
 event types, the envelope, the payload models, and the delivery-tuning
-constants the WP2 stream drivers consume (delta batching 50 ms / 32 tokens,
-15 s heartbeat, ``X-Accel-Buffering: no``, A22). The stream drivers (A31) and
+constants the stream drivers consume (delta batching 50 ms / 32 tokens,
+15 s heartbeat, ``X-Accel-Buffering: no``). The stream drivers and
 the SSE transport land in later work packages; the event sinks and the
 Postgres ``run_events`` log live in ``vdreamer.eventlog``.
 """
@@ -25,32 +25,32 @@ from typing import Any, Final, Literal
 import pydantic
 
 #: The protocol version carried in every envelope as ``"v"`` and asserted by
-#: ``X-Protocol-Version`` (PRD §3.3, §6.1).
+#: ``X-Protocol-Version``.
 PROTOCOL_VERSION: Final[str] = "1.0"
 
-#: The header clients send with the protocol version (PRD §6.1).
+#: The header clients send with the protocol version.
 PROTOCOL_VERSION_HEADER: Final[str] = "X-Protocol-Version"
 
 #: Deltas batch at emission: flush at most every 50 ms or every 32 tokens
-#: (PRD §3.3 line 211). Consumed by the WP2 stream drivers.
+#:. Consumed by the stream drivers.
 DELTA_BATCH_INTERVAL_S: Final[float] = 0.05
 
-#: The token count that forces a delta batch flush (PRD §3.3 line 211).
+#: The token count that forces a delta batch flush.
 DELTA_BATCH_MAX_TOKENS: Final[int] = 32
 
-#: SSE heartbeat cadence (PRD §3.3 line 211); idle proxy timeouts must be
-#: more than 2x this (§6.2).
+#: SSE heartbeat cadence; idle proxy timeouts must be
+#: more than 2x this.
 HEARTBEAT_INTERVAL_S: Final[float] = 15.0
 
-#: Disable proxy response buffering for SSE (A22).
+#: Disable proxy response buffering for SSE.
 SSE_BUFFERING_HEADER: Final[str] = "X-Accel-Buffering"
 
-#: The value that disables buffering (A22).
+#: The value that disables buffering.
 SSE_BUFFERING_VALUE: Final[str] = "no"
 
 
 class EventType(enum.StrEnum):
-    """The twelve protocol event types (PRD §3.3 table, docs/tasks.md line 92)."""
+    """The twelve protocol event types (table)."""
 
     RUN_STATUS = "run.status"
     TOKEN_DELTA = "token.delta"
@@ -69,11 +69,11 @@ class EventType(enum.StrEnum):
 class _Payload(pydantic.BaseModel):
     """Base for payload models: ``event_payload()`` drops ``None`` optionals.
 
-    The PRD payload tables mark optional fields with ``?``; absent optionals
+    The payload tables mark optional fields with ``?``; absent optionals
     are omitted from the wire payload, not serialized as ``null``. Emitters
-    (the WP2 stream drivers) call ``event_payload()`` — the name avoids
+    (the stream drivers) call ``event_payload()`` — the name avoids
     shadowing: ``InterruptRequestedPayload`` has a *field* named ``payload``
-    (PRD §4.2). Tests spot-check the dumps against the §3.3 shapes.
+   . Tests spot-check the dumps against the shapes.
     """
 
     model_config = pydantic.ConfigDict(populate_by_name=True)
@@ -91,7 +91,7 @@ class ErrorInfo(_Payload):
 
 
 class RunStatusPayload(_Payload):
-    """``run.status``: ``{status, attempt, error?: {code, message}}`` (§3.3)."""
+    """``run.status``: ``{status, attempt, error?: {code, message}}``."""
 
     status: str
     attempt: int = 0
@@ -99,10 +99,10 @@ class RunStatusPayload(_Payload):
 
 
 class TokenDeltaPayload(_Payload):
-    """``token.delta`` / ``thinking.delta``: ``{message_id, text}`` (§3.3).
+    """``token.delta`` / ``thinking.delta``: ``{message_id, text}``.
 
     The same shape serves both delta types; ``thinking.delta`` is suppressed
-    entirely when ``expose_thinking=false`` — that gate is the driver's, WP2.
+    entirely when ``expose_thinking=false`` — that gate is the stream driver's.
     """
 
     message_id: str
@@ -111,7 +111,7 @@ class TokenDeltaPayload(_Payload):
 
 class MessageCompletedPayload(_Payload):
     """``message.completed``: ``{message_id, role, text, thinking?, citation_ids[],
-    usage?}`` (§3.3)."""
+    usage?}``."""
 
     message_id: str
     role: str
@@ -122,10 +122,10 @@ class MessageCompletedPayload(_Payload):
 
 
 class ToolCallPayload(_Payload):
-    """``tool.call``: ``{tool_call_id, name, source, args}`` (§3.3, A33).
+    """``tool.call``: ``{tool_call_id, name, source, args}``.
 
     ``source`` is ``custom|langchain|mcp:{server}``. ``args`` must already be
-    redacted when it reaches here — the governance pipeline (§2.7) redacts
+    redacted when it reaches here — the governance pipeline redacts
     policy keys plus the defaults (password, token, secret, api_key,
     authorization) before the event is emitted; this model does not redact.
     """
@@ -138,10 +138,10 @@ class ToolCallPayload(_Payload):
 
 class ToolResultPayload(_Payload):
     """``tool.result``: ``{tool_call_id, status, error?, summary, artifact_ids[],
-    duration_ms}`` (§3.3).
+    duration_ms}``.
 
     Full tool output is *never* streamed — oversized results become artifacts
-    (§2.7) and only ``summary`` plus ``artifact_ids`` ride the event.
+    and only ``summary`` plus ``artifact_ids`` ride the event.
     """
 
     tool_call_id: str
@@ -153,7 +153,7 @@ class ToolResultPayload(_Payload):
 
 
 class CitationSource(_Payload):
-    """The ``{artifact_id?, uri?, title}`` source block of a ``citation`` (§3.3)."""
+    """The ``{artifact_id?, uri?, title}`` source block of a ``citation``."""
 
     artifact_id: str | None = None
     uri: str | None = None
@@ -162,7 +162,7 @@ class CitationSource(_Payload):
 
 class CitationPayload(_Payload):
     """``citation``: ``{citation_id, message_id, source, locator?, snippet, score?}``
-    (§3.3).
+   .
 
     ``snippet`` is capped at 300 characters (``MAX_SNIPPET_CHARS``,
     ``vdreamer.context``) by the emitters — ``emit_citation`` truncates — so
@@ -178,14 +178,14 @@ class CitationPayload(_Payload):
 
 
 class ProgressPayload(_Payload):
-    """``progress``: ``{label, pct?}`` (§3.3)."""
+    """``progress``: ``{label, pct?}``."""
 
     label: str
     pct: float | None = None
 
 
 class LogPayload(_Payload):
-    """``log``: ``{level, message}`` (§3.3)."""
+    """``log``: ``{level, message}``."""
 
     level: str
     message: str
@@ -193,10 +193,10 @@ class LogPayload(_Payload):
 
 class InterruptRequestedPayload(_Payload):
     """``interrupt.requested``: ``{interrupt_id, kind, scope?, approver_role?,
-    actions[], payload, edit_schema?, expires_at?}`` (PRD §4.2).
+    actions[], payload, edit_schema?, expires_at?}``.
 
-    ``edit_schema`` is the JSON Schema of the ``edit`` payload (§4.1);
-    ``expires_at`` is when the interrupt expires (§4.4).
+    ``edit_schema`` is the JSON Schema of the ``edit`` payload;
+    ``expires_at`` is when the interrupt expires.
     """
 
     interrupt_id: str
@@ -210,7 +210,7 @@ class InterruptRequestedPayload(_Payload):
 
 
 class InterruptResolvedPayload(_Payload):
-    """``interrupt.resolved``: ``{interrupt_id, action, resolved_by}`` (PRD §4.2)."""
+    """``interrupt.resolved``: ``{interrupt_id, action, resolved_by}``."""
 
     interrupt_id: str
     action: str
@@ -218,13 +218,13 @@ class InterruptResolvedPayload(_Payload):
 
 
 class ArtifactCreatedPayload(_Payload):
-    """``artifact.created`` (PRD §3.4).
+    """``artifact.created``.
 
     ``{artifact_id, question_id, session_id, kind, renderer?, name, mime_type,
     size_bytes?, preview, view_url, download_url, metadata}``. ``question_id``
-    is the ``run_id`` and ``session_id`` the ``thread_id`` (§3.1). ``preview``
-    is the SSE preview block per kind (§3.4 table); ``view_url`` /
-    ``download_url`` are the gateway artifact routes (§2.5).
+    is the ``run_id`` and ``session_id`` the ``thread_id``. ``preview``
+    is the SSE preview block per kind (table); ``view_url`` /
+    ``download_url`` are the gateway artifact routes.
     """
 
     artifact_id: str
@@ -242,14 +242,14 @@ class ArtifactCreatedPayload(_Payload):
 
 
 class EventEnvelope(pydantic.BaseModel):
-    """The one wire envelope every event rides (PRD §3.3).
+    """The one wire envelope every event rides.
 
     Field order is the contract — the JSON object starts with ``"v"``:
 
     ``{"v":"1.0","type":"tool.call","run_id":"r_…","thread_id":"t_…",
     "agent":"sql-analyst","seq":42,"ts":"…","ns":[],"payload":{}}``
 
-    ``ns`` is the subgraph namespace path, ``[]`` at the graph root (A31
+    ``ns`` is the subgraph namespace path, ``[]`` at the graph root (
     drivers preserve it). ``ts`` is UTC ISO-8601; ``seq`` is per-run,
     monotonically increasing from 1 — allocated by ``SeqCounter`` in memory
     or by the Postgres log (``vdreamer.eventlog``), never guessed here.
@@ -271,5 +271,5 @@ class EventEnvelope(pydantic.BaseModel):
 
     @property
     def sse_id(self) -> str:
-        """The SSE ``id:`` value — ``"{run_id}:{seq}"`` (PRD §3.3, A3)."""
+        """The SSE ``id:`` value — ``"{run_id}:{seq}"``."""
         return f"{self.run_id}:{self.seq}"

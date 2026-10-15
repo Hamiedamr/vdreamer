@@ -1,12 +1,11 @@
-"""The ``BaseAgent`` developer contract (PRD §2.2, D1, A5).
+"""The ``BaseAgent`` developer contract.
 
-Complete as of Milestone 1 (Developer Contract Core):
+The contract:
 
-- **Attributes** (§2.2): ``name``, ``mode``, ``models``, ``resources``,
+- **Attributes**: ``name``, ``mode``, ``models``, ``resources``,
   ``input_schema``, ``expose_thinking``, ``access_roles`` — plus the
-  Milestone-1 additions ``tool_policies`` / ``interrupt_policies`` (§2.7,
-  §4.5) and ``durability`` (§2.4, A42).
-- **``build(ctx)``** returns any accepted graph (§2.4): a ``StateGraph``
+  policy attributes ``tool_policies`` / ``interrupt_policies`` and ``durability``.
+- **``build(ctx)``** returns any accepted graph: a ``StateGraph``
   (vdreamer compiles it), an already-compiled graph, a functional-API
   ``@entrypoint``, or a ``create_agent`` / ``create_deep_agent`` prebuilt —
   prebuilts get their wiring from ``ctx.agent_kwargs()``.
@@ -32,7 +31,7 @@ from vdreamer.tools import InterruptPolicy, Policy, VDreamerToolMiddleware
 
 
 class Mode(enum.Enum):
-    """How an agent is driven (PRD §2.2): CHAT | HEADLESS | BOTH."""
+    """How an agent is driven: CHAT | HEADLESS | BOTH."""
 
     CHAT = "chat"
     HEADLESS = "headless"
@@ -40,8 +39,8 @@ class Mode(enum.Enum):
 
 
 def runs_headless(agent: Any, run_headless: bool = False) -> bool:
-    """Whether a run is headless (D15): approvals need an ``approver_role``
-    (A16) and a ``reject`` ends the run ``rejected`` (§4.3).
+    """Whether a run is headless: approvals need an ``approver_role``
+    and a ``reject`` ends the run ``rejected``.
 
     Every run of a ``HEADLESS`` agent is. A ``BOTH`` agent's runs started
     through the chat routes are not; its ``/trigger`` runs are, which the
@@ -52,20 +51,20 @@ def runs_headless(agent: Any, run_headless: bool = False) -> bool:
 
 @dataclass
 class BuildContext:
-    """What ``BaseAgent.build()`` receives (PRD §2.2).
+    """What ``BaseAgent.build()`` receives.
 
     A worker populates this once per agent before ``build()`` runs, then
-    caches the graph ("build() runs once per worker", §2.2). ``settings``
+    caches the graph ("build() runs once per worker"). ``settings``
     carries deployment config; ``checkpointer`` / ``store`` are the runtime
     wiring ``agent_kwargs()`` forwards to prebuilt agents.
 
     ``models`` / ``resources`` hold the agent's declared aliases only
-    (``BaseAgent.models`` / ``BaseAgent.resources``, §3.6–§3.7): a LangChain
+    (``BaseAgent.models`` / ``BaseAgent.resources``): a LangChain
     chat model or a native fastembed object per model alias, and the native
-    pooled client per resource alias (A35), opened at worker start
+    pooled client per resource alias, opened at worker start
     (``vdreamer.backends``). Looking up an undeclared alias is a ``KeyError``.
 
-    ``tools`` is the :class:`~vdreamer.governance.ToolKit` (§2.7):
+    ``tools`` is the :class:`~vdreamer.governance.ToolKit`:
     ``ctx.tools.govern(tools)`` and ``ctx.tools.mcp(server, include=[...])``.
     ``tool_policies`` are the agent's own (``BaseAgent.tool_policies``), applied
     by both the toolkit and the ``agent_kwargs()`` middleware.
@@ -84,12 +83,12 @@ class BuildContext:
             self.tools = ToolKit(self.tool_policies)
 
     def agent_kwargs(self) -> dict[str, Any]:
-        """``create_agent`` / ``create_deep_agent`` kwargs (PRD §2.4).
+        """``create_agent`` / ``create_deep_agent`` kwargs.
 
         Supplies exactly ``{checkpointer, store, context_schema:
         VDreamerContext, middleware: [VDreamerToolMiddleware(...)]}`` — the
         run-context schema (nodes read the run through ``runtime.context``)
-        plus the tool-governance middleware (§2.7) carrying the agent's
+        plus the tool-governance middleware carrying the agent's
         ``tool_policies`` — so a prebuilt agent wires into vdreamer without
         touching internals.
         """
@@ -102,7 +101,7 @@ class BuildContext:
 
 
 class BaseAgent:
-    """An agent served by vdreamer (PRD §2.2).
+    """An agent served by vdreamer.
 
     Subclasses declare the attribute contract and implement ``build()``.
     Nothing magic: plain class attributes, a plain method.
@@ -118,40 +117,40 @@ class BaseAgent:
 
     tool_policies: Mapping[str, Policy] = {}
     """Tool governance policies keyed by tool name or ``fnmatch`` glob
-    (PRD §2.7), e.g. ``tool_policies = {"sql_db_*": Policy(side_effects=True)}``.
+   , e.g. ``tool_policies = {"sql_db_*": Policy(side_effects=True)}``.
     Class-level only: subclasses *replace* the whole mapping, so the shared
     empty default is never mutated; resolution against a decorator's own
     policy (per field, agent wins) is ``vdreamer.tools.resolve_policy``.
     """
 
     interrupt_policies: Mapping[str, InterruptPolicy] = {}
-    """HITL overrides for non-vdreamer interrupt sources (PRD §4.5, A44),
+    """HITL overrides for non-vdreamer interrupt sources,
     keyed by ``kind`` — ``"tool_review"`` | ``"mcp_elicitation"`` |
     ``"generic"`` — or by tool name. Class-level only, replaced wholesale
     like ``tool_policies``.
     """
 
     durability: Durability = DEFAULT_DURABILITY
-    """Per-superstep invocation durability (PRD §2.4, A42): ``"sync"`` by
-    default so every step is checkpointed and crash recovery (A6) resumes
+    """Per-superstep invocation durability: ``"sync"`` by
+    default so every step is checkpointed and crash recovery resumes
     from the last checkpoint; set ``durability = "async"`` per agent to opt
     out. Resolved per run by ``vdreamer.runtime.AgentRunner``.
     """
 
     def build(self, ctx: BuildContext) -> Any:
-        """Return this agent's LangGraph graph (PRD §2.4). Runs once per worker."""
+        """Return this agent's LangGraph graph. Runs once per worker."""
         raise NotImplementedError("agents must implement build(ctx)")
 
     async def on_run_start(self, run: Any) -> None:
-        """Optional lifecycle hook (PRD §2.2), fired by ``runtime.AgentRunner``.
+        """Optional lifecycle hook, fired by ``runtime.AgentRunner``.
 
         ``run`` is a ``RunInfo`` with ``status="running"``, before the graph
-        executes. The worker (Milestone 3) maps interrupts onto
+        executes. The worker maps interrupts onto
         ``awaiting_approval`` between these hooks.
         """
 
     async def on_run_end(self, run: Any, status: str) -> None:
-        """Optional lifecycle hook (PRD §2.2), fired by ``runtime.AgentRunner``.
+        """Optional lifecycle hook, fired by ``runtime.AgentRunner``.
 
         ``status`` is ``"completed"``, or ``"failed"`` with the exception
         already re-raised to the caller; ``run`` is the same ``RunInfo``

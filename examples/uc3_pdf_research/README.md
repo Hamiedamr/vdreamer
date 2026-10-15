@@ -1,6 +1,6 @@
 # UC3 — Multi-PDF Research & Comparison (chat + headless, EN + AR)
 
-Two PRD §7.3 reference agents over one Qdrant collection, built on vdreamer's public API only.
+Two reference agents over one Qdrant collection, built on vdreamer's public API only.
 
 **`pdf-ingest`** (headless, `/trigger {documents: [FileRef, ...]}`):
 - **Parse.** PDFs are parsed by `pypdf` *in the sandbox*, in page batches; `.txt`/`.md` are split on form feeds.
@@ -25,4 +25,4 @@ vdreamer run pdf-ingest --trigger --input '{"documents": [{"object_key": "inputs
 vdreamer run pdf-research --message "Compare the two reports on revenue growth"   # served by a second dev/worker
 ```
 
-PDF parsing needs a POSIX worker (the sandbox, D19). On other hosts, PDFs are reported as skipped and text documents still ingest. `config/models.ollama.yaml` uses Ollama's `gemma4:31b-cloud` as the reasoner (the `-cloud` tag runs on ollama.com).
+PDF parsing needs a POSIX worker (the sandbox). On other hosts, PDFs are reported as skipped and text documents still ingest. `config/models.ollama.yaml` uses Ollama's `gemma4:31b-cloud` as the reasoner (the `-cloud` tag runs on ollama.com).

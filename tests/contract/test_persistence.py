@@ -90,9 +90,8 @@ def test_dsn_from_env_returns_value(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_dsn_from_env_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VDREAMER_DB_DSN", raising=False)
-    with pytest.raises(PersistenceConfigError, match="VDREAMER_DB_DSN") as exc_info:
+    with pytest.raises(PersistenceConfigError, match="VDREAMER_DB_DSN"):
         dsn_from_env("VDREAMER_DB_DSN")
-    assert "A23" in str(exc_info.value)
 
 
 def test_load_saver_class_is_the_upstream_async_postgres_saver() -> None:

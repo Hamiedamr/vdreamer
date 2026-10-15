@@ -1,9 +1,9 @@
-"""``vdreamer run <agent>`` — a terminal client for AI developers (PRD §2.3, §6).
+"""``vdreamer run <agent>`` — a terminal client for AI developers.
 
 It talks to the gateway over REST/SSE only, exactly as a client app must
 (``docs/protocol.md``). So it is the contract exercised from a terminal, not
 a privileged backdoor, and not a client SDK: nothing here is importable API
-for apps (A45).
+for apps.
 
 - **chat** (default): create a thread (or ``--thread``), send ``--message``
   / ``--input`` or prompt for one, stream the run, then prompt for the next
@@ -16,11 +16,11 @@ for apps (A45).
   user may see — how an approver (``approver_role``, four-eyes) acts on runs
   they do not own.
 
-Streaming follows §6.1: ``X-Protocol-Version: 1``; reconnect with backoff and
+Streaming follows the protocol: ``X-Protocol-Version: 1``; reconnect with backoff and
 jitter and ``Last-Event-ID``; dedup by ``(run_id, seq)``; unknown event types
 are shown dimmed and skipped. An ``interrupt.requested`` is resolved inline:
 the client fetches the record, offers its ``actions[]``, builds the body the
-interrupt's source needs (§4.5), and sends ``expected_version``; a ``409``
+interrupt's source needs, and sends ``expected_version``; a ``409``
 refreshes and asks again. The run then continues on the same stream.
 
 Identity comes from flags (``--user``, ``--roles``) and the token from an
@@ -121,7 +121,7 @@ class Gateway:
             headers=headers,
             transport=self.transport,
             trust_env=False,
-            # Reads block for heartbeats: 2x the interval is a dead connection (§6.1).
+            # Reads block for heartbeats: 2x the interval is a dead connection.
             timeout=httpx.Timeout(30.0, read=2 * HEARTBEAT_INTERVAL_S + 5),
         )
 
@@ -333,7 +333,7 @@ def _choose(ask: Ask, prompt: str, options: list[str]) -> str:
 
 
 def build_resolution(record: Mapping[str, Any], ask: Ask, out: TextIO) -> dict[str, Any]:
-    """The resolve body for ``record`` (§4.5), asked of the user; without ``expected_version``."""
+    """The resolve body for ``record``, asked of the user; without ``expected_version``."""
     kind = str(record.get("kind"))
     actions = [str(action) for action in record.get("actions") or []]
     payload = record.get("payload") or {}
@@ -450,7 +450,7 @@ class Session:
         """Resolve every pending interrupt of ``run_id`` this user may see."""
         try:
             inbox = self.gateway.get("/interrupts")["interrupts"]
-        except ClientError as exc:  # a service token reads no inbox (A16)
+        except ClientError as exc:  # a service token reads no inbox
             raise Detached(f"the run waits for an approver ({exc})") from exc
         records = [
             r for r in inbox if r.get("run_id") == run_id and r.get("status") == "pending"
@@ -595,7 +595,7 @@ def run_terminal(
     session = Session(gateway, options.agent, prompt, stream, style, sleep=sleep)
     thread_id = options.thread
     try:
-        if service:  # a service token opens /trigger and its runs only (A16)
+        if service:  # a service token opens /trigger and its runs only
             agent: Mapping[str, Any] | None = {"name": options.agent, "mode": "headless"}
         else:
             agents = gateway.get("/agents")["agents"]
@@ -618,7 +618,7 @@ def run_terminal(
 
         if options.inbox:
             # An approver acts on runs they do not own (another user's, a service's):
-            # the inbox is their view, not the thread (§4, owner-scoped threads).
+            # the inbox is their view, not the thread (owner-scoped threads).
             pending = [
                 r for r in gateway.get("/interrupts")["interrupts"]
                 if r.get("agent") == options.agent and r.get("status") == "pending"
@@ -638,7 +638,7 @@ def run_terminal(
                 run_id, current = latest
                 verb = "reattaching to" if current in ACTIVE else "replaying"
                 session.say(style.dim(f"[{verb} {run_id} on {thread_id}]"))
-                # The run's stream replays from its first event, then goes live (§3.3).
+                # The run's stream replays from its first event, then goes live.
                 status = session.follow(run_id)
                 if headless or (options.once and not fresh):
                     return 0 if status == "completed" else 2

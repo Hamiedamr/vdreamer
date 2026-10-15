@@ -1,4 +1,4 @@
-"""POSIX launcher for sandboxed children (D19/A19): limits first, then ``execve``.
+"""POSIX launcher for sandboxed children: limits first, then ``execve``.
 
 ``vdreamer.sandbox`` starts ``python -I -B -m vdreamer._sandbox_launch CONFIG``
 (``start_new_session=True``, every other fd closed). This process is fresh and
@@ -26,7 +26,7 @@ import json
 import os
 import sys
 
-if sys.platform == "win32":  # pragma: no cover - POSIX-only module (D19)
+if sys.platform == "win32":  # pragma: no cover - POSIX-only module
     raise SystemExit("vdreamer._sandbox_launch is POSIX-only")
 
 import ctypes

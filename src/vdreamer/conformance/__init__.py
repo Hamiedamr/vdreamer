@@ -1,7 +1,7 @@
-"""The protocol 1.0 conformance kit (PRD §6.1): recorded SSE streams + expected client state.
+"""The protocol 1.0 conformance kit: recorded SSE streams + expected client state.
 
 Client teams test their SSE handling and event fold against these files —
-vdreamer ships no client code (A45), so the kit *is* the executable contract.
+vdreamer ships no client code, so the kit *is* the executable contract.
 ``vdreamer export-schema`` writes it to ``<out>/conformance/``; every release
 attaches it. ``README.md`` (beside the recordings) defines the file format and
 the fold; ``docs/protocol.md`` the normative client behavior around it.

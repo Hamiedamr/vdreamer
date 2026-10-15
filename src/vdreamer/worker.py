@@ -1,15 +1,15 @@
-"""The worker loop (PRD §2.1, §3.2; Milestone 3 WP2).
+"""The worker loop.
 
 One :class:`Worker` serves one agent: it claims ``queued`` runs from a
 :class:`~vdreamer.queue.RunQueue`, drives each through the agent's
-:class:`~vdreamer.runtime.AgentRunner`, and moves the row through the §3.2
-lifecycle. Postgres is the only gateway↔worker transport (A7) — the worker
+:class:`~vdreamer.runtime.AgentRunner`, and moves the row through the
+lifecycle. Postgres is the only gateway↔worker transport — the worker
 meets the gateway on the queue rows and the ``run_events`` log, never over a
 direct API.
 
-The three §3.2 control paths, and where each hooks in:
+The three control paths, and where each hooks in:
 
-- **Cancel** — the gateway (M4) calls :meth:`Worker.request_cancel`; a locally
+- **Cancel** — the gateway calls :meth:`Worker.request_cancel`; a locally
   active run gets :meth:`RunControl.request_drain`, and the run drains
   cooperatively at the next superstep boundary: the drain check lives in the
   per-run sink wrapper's ``write`` — the only hook between driver envelopes
@@ -18,7 +18,7 @@ The three §3.2 control paths, and where each hooks in:
   The stream aborts without a terminal envelope (a consumer-side raise closes
   the driver generator at its yield; the driver's ``except Exception`` never
   sees it), the last checkpoint stays resumable, and the run is finished
-  ``cancelled`` (PRD §3.2: "cancel calls ``RunControl.request_drain()`` and
+  ``cancelled`` ("cancel calls ``RunControl.request_drain()`` and
   the run → ``cancelled``").
 - **SIGTERM** — :meth:`Worker.run` installs a POSIX main-thread handler (on
   Windows ``SIGTERM`` is never delivered, so the install is skipped there and
@@ -31,18 +31,18 @@ The three §3.2 control paths, and where each hooks in:
   at startup (``recover_on_start``) and its heartbeat task drains a run whose
   lease the queue no longer honors (``lease_lost``), marking nothing — the
   row belongs to whoever holds it now. Side effects re-executed on resume
-  deduplicate through ``ctx.idempotency_key`` (A6).
+  deduplicate through ``ctx.idempotency_key``.
 
-Interrupts (:meth:`~vdreamer.context.require_approval`, A44) need no worker
+Interrupts (:meth:`~vdreamer.context.require_approval`) need no worker
 machinery of their own: the stream driver detects the pending interrupts and
 ends the run on ``run.status`` ``awaiting_approval`` (``streaming._RunMapper.
 finish``; the v2 driver reads them from ``aget_state(config).interrupts``) —
 the worker reads that terminal status back from the sink and calls
-``queue.suspend``: approvals free the worker (§3.2), and a resolution
+``queue.suspend``: approvals free the worker, and a resolution
 enqueues a resume (the gateway plants the ``Command(resume=...)`` input on
-the row, M4/M5).
+the row).
 
-Milestone 4 (the gateway contract) adds four things the worker owns:
+For the gateway contract, the worker owns four things:
 
 - **Input selection** (:meth:`Worker._graph_input`): the gateway's interrupt
   resolution plants a resume map ``{interrupt_id: value}`` on the row and
@@ -63,7 +63,7 @@ Milestone 4 (the gateway contract) adds four things the worker owns:
   ``vdreamer_run_duration_seconds``.
 
 Node failures map through the driver's failure path: a node raising
-:class:`NodeTimeoutError` / :class:`NodeError` (PRD §2.4 — developer-owned
+:class:`NodeTimeoutError` / :class:`NodeError` (developer-owned
 ``add_node(timeout=…, error_handler=…)``) reaches the worker as any other
 exception, with the driver's ``run.status`` ``failed`` envelope —
 ``error {code, message}`` — already in the sink. Only when the failure
@@ -108,7 +108,7 @@ _log = logging.getLogger(__name__)
 
 
 class NodeError(Exception):
-    """A graph node failed (PRD §2.4: ``NodeError`` maps to ``run.status.error``).
+    """A graph node failed (``NodeError`` maps to ``run.status.error``).
 
     Raised by agent code (a node body or its ``add_node(error_handler=…)``,
     both developer-owned). ``node`` names the failing node when known; the
@@ -123,7 +123,7 @@ class NodeError(Exception):
 
 
 class NodeTimeoutError(Exception):
-    """A node exceeded its ``add_node(timeout=…)`` budget (PRD §2.4).
+    """A node exceeded its ``add_node(timeout=…)`` budget.
 
     Like :class:`NodeError` it maps to ``run.status.error``; it additionally
     carries the ``timeout_s`` budget that was exceeded.
@@ -136,7 +136,7 @@ class NodeTimeoutError(Exception):
 
 
 class RunDrained(Exception):
-    """Raised out of the streaming loop when a drain was requested (WP2).
+    """Raised out of the streaming loop when a drain was requested.
 
     Carries the :meth:`RunControl.request_drain` ``reason`` that won —
     ``"cancel"`` finishes the run ``cancelled``; ``"sigterm"`` requeues it
@@ -150,7 +150,7 @@ class RunDrained(Exception):
 
 
 class RunControl:
-    """Per-active-run drain control (PRD §3.2: "cancel calls
+    """Per-active-run drain control ("cancel calls
     ``RunControl.request_drain()``").
 
     One instance per locally active run, held by the :class:`Worker` in
@@ -158,8 +158,8 @@ class RunControl:
     wins (a ``cancel`` arriving after a ``lease_lost`` cannot resurrect a run
     the queue has already taken away, and vice versa). The drain itself is
     cooperative: the worker's sink wrapper raises :class:`RunDrained` at the
-    next envelope write, which is the next superstep boundary (§2.5:
-    "cooperative cancel at next superstep"), leaving the last checkpoint
+    next envelope write, which is the next superstep boundary (cooperative
+    cancel at the next superstep), leaving the last checkpoint
     resumable.
     """
 
@@ -234,7 +234,7 @@ class _RunSink(EventSink):
             self.last_status = str(envelope.payload.get("status"))
         elif envelope.type is EventType.INTERRUPT_REQUESTED:
             if self._interrupt_policies:
-                # §4.5: the agent's interrupt_policies attach approver_role /
+                # The agent's interrupt_policies attach approver_role /
                 # scope / TTL to non-require_approval sources — before the
                 # record and the event, so both carry the same policy.
                 envelope = envelope.model_copy(
@@ -246,7 +246,7 @@ class _RunSink(EventSink):
                 )
             if self._on_interrupt is not None:
                 # The record first, then the event: a client reacting to
-                # ``interrupt.requested`` must find the record in the inbox (§4.2).
+                # ``interrupt.requested`` must find the record in the inbox.
                 await self._on_interrupt(envelope)
         await self._inner.write(envelope)
 
@@ -274,10 +274,10 @@ def _error_code(error: BaseException) -> str:
 
 
 class Worker:
-    """The worker loop: claim queued runs, drive them, settle the row (§3.2).
+    """The worker loop: claim queued runs, drive them, settle the row.
 
     One worker serves one agent (one :class:`~vdreamer.runtime.AgentRunner`);
-    the CLI's ``vdreamer worker`` entrypoint (WP3) runs one process per agent,
+    the CLI's ``vdreamer worker`` entrypoint runs one process per agent,
     picked with ``--agent``. Claims go through :meth:`~vdreamer.queue.RunQueue.claim` — which
     stamps the lease and increments ``attempt`` — and every settled row is
     either terminal, ``awaiting_approval`` (no lease — approvals free the
@@ -309,26 +309,26 @@ class Worker:
             agent_name: the agent this worker serves — the ``agent`` field of
                 worker-authored envelopes and the run context's ``agent_name``.
             claimant: the ``claimed_by`` stamp; a fresh id when omitted.
-            checkpointer: the worker-opened checkpointer (WP3 wires
+            checkpointer: the worker-opened checkpointer (wires
                 ``persistence.open_checkpointer`` here and hands it to the
                 runners it builds; the runner already carries its own today).
             sink_factory: builds the per-run event sink from the ``run_id``;
                 an in-memory discard sink when omitted (the wrapper still
                 observes the envelopes — the terminal status is read from
                 them, not from a return value).
-            lease_interval_s: the claim's lease window (§3.2); the heartbeat
+            lease_interval_s: the claim's lease window; the heartbeat
                 fires at half of it.
             poll_interval_s: the idle sleep between claims.
-            recover_on_start: run the §3.2 recovery sweep
+            recover_on_start: run the recovery sweep
                 (``queue.requeue_expired``) once on the worker's first
                 iteration. The constructor is synchronous — the sweep is an
                 await — so ``recover_on_start`` schedules it for the first
                 :meth:`run_once` / :meth:`run`; call :meth:`recover` directly
                 to run (or re-run) it explicitly.
             interrupt_store: where ``interrupt.requested`` envelopes become
-                §4.2 records for the gateway's inbox; ``None`` keeps none.
+                records for the gateway's inbox; ``None`` keeps none.
             artifact_store: bound around every run, so the artifacts a run
-                writes (governed-tool overflow, §2.7 step 5) are kept for the
+                writes (governed-tool overflow, step 5) are kept for the
                 gateway's artifact routes; ``None`` keeps only the events.
         """
         self._runner = runner
@@ -378,7 +378,7 @@ class Worker:
         ``"sigterm"`` — the current :meth:`run_once` releases the run back to
         the queue, attempt unconsumed — and the loop then exits. A run blocked
         inside a node delays both (node timeouts are the developer-owned
-        answer, PRD §2.4).
+        answer).
         """
         self._install_sigterm()
         try:
@@ -390,7 +390,7 @@ class Worker:
     # -- cancel / shutdown ---------------------------------------------------
 
     async def request_cancel(self, run_id: str) -> bool:
-        """The worker half of ``POST /runs/{id}/cancel`` (§2.5; M4 wires the route).
+        """The worker half of ``POST /runs/{id}/cancel`` (the gateway route sets the row).
 
         A locally active run is drained cooperatively: ``True`` and the
         :meth:`run_once` driving it finishes the row ``cancelled``. A run not
@@ -423,11 +423,11 @@ class Worker:
     # -- recovery ------------------------------------------------------------
 
     async def recover(self) -> int:
-        """Run the §3.2 recovery sweep once: every expired lease requeued.
+        """Run the recovery sweep once: every expired lease requeued.
 
         Requeued runs resume from their checkpoint on the next claim (the
         in-flight node re-executes; side effects deduplicate through
-        ``ctx.idempotency_key``, A6). Returns how many runs were handled.
+        ``ctx.idempotency_key``). Returns how many runs were handled.
         """
         handled = await self._queue.requeue_expired()
         self._recovered = True
@@ -487,7 +487,7 @@ class Worker:
     def _config_for(self, record: RunRecord) -> RunnableConfig:
         """The run's LangGraph config: the client's ``config`` plus the addressing.
 
-        The client's ``configurable`` entries (validated by the gateway, §2.5)
+        The client's ``configurable`` entries (validated by the gateway)
         are kept except the reserved keys; ``thread_id`` keys the checkpointer
         and :data:`~vdreamer.runtime.RUN_ID_CONFIGURABLE_KEY` stamps every
         checkpoint with this run (see :meth:`_graph_input`).
@@ -507,21 +507,21 @@ class Worker:
         return config
 
     async def _graph_input(self, record: RunRecord, config: RunnableConfig) -> Any:
-        """What this attempt feeds the graph (§3.2, §4.3).
+        """What this attempt feeds the graph.
 
         In order:
 
         1. the row's resume map, narrowed to the interrupts the checkpoint
            still awaits → ``Command(resume={interrupt_id: value})`` (an
-           approval resume — "resolution enqueues a resume", §3.2);
+           approval resume — "resolution enqueues a resume");
         2. a checkpoint written by this very run with nodes left to run → the
            ``None`` input, i.e. resume from the checkpoint (a recovered or
-           released attempt: the in-flight node re-executes, A6; a pending
+           released attempt: the in-flight node re-executes; a pending
            interrupt with no resolution yet simply re-suspends);
         3. otherwise the row's original input (a fresh run).
 
         Without a checkpointer there is nothing to resume, and a state read
-        that fails falls back to the input — the M3 behaviour.
+        that fails falls back to the input — the behaviour.
         """
         if not self._runner.has_checkpointer:
             return record.input
@@ -541,7 +541,7 @@ class Worker:
         return record.input
 
     async def _record_interrupt(self, record: RunRecord, envelope: EventEnvelope) -> None:
-        """Persist the §4.2 record for one ``interrupt.requested`` envelope."""
+        """Persist the record for one ``interrupt.requested`` envelope."""
         assert self._interrupt_store is not None  # wired only with a store
         await self._interrupt_store.create(
             record_from_event(envelope, initiator_id=record.user_id)
@@ -552,7 +552,7 @@ class Worker:
 
         ``heartbeat`` returning ``False`` (or raising — a queue outage must
         not run blind) means the row is gone or no longer ours. A row the
-        gateway cancelled (``POST /runs/{id}/cancel``, M4) drains with
+        gateway cancelled (``POST /runs/{id}/cancel``) drains with
         ``"cancelled"`` — the worker still owes the run's final event; any
         other loss (the recovery sweep took it) drains with ``lease_lost`` and
         the worker marks nothing.
@@ -583,9 +583,9 @@ class Worker:
         """Settle a run whose stream ended normally (the driver's terminal status)."""
         status = sink.last_status
         if status == "awaiting_approval":
-            # Approvals free the worker (§3.2): no lease while the interrupt
+            # Approvals free the worker: no lease while the interrupt
             # waits; a resolution requeues the row (the gateway plants the
-            # Command(resume=…) input, M4/M5).
+            # Command(resume=…) input).
             try:
                 await self._queue.suspend(record.id)
             except InvalidTransition:  # raced an external cancel/finish
@@ -601,17 +601,17 @@ class Worker:
     async def _finish_drained(self, record: RunRecord, sink: _RunSink, reason: str) -> None:
         """Settle a run the cooperative drain took out of its streaming loop."""
         if reason == "cancel":
-            # §3.2: the run moves to cancelled, its last checkpoint resumable.
+            # The run moves to cancelled, its last checkpoint resumable.
             # The stream aborted without a terminal envelope, so the worker
             # authors the final ``run.status`` the SSE log should end on.
             await sink.write_terminal(self._status_envelope(record, sink, "cancelled"))
             await self._finish_row(record, RunState.CANCELLED)
         elif reason == "cancelled":
-            # The gateway cancelled the row (another process, M4): the row is
+            # The gateway cancelled the row (another process): the row is
             # already final, but the event log still needs its last word.
             await sink.write_terminal(self._status_envelope(record, sink, "cancelled"))
         elif reason == "sigterm":
-            # §3.2: drained and requeued WITHOUT consuming an attempt —
+            # Drained and requeued WITHOUT consuming an attempt —
             # release() gives back the claim's attempt increment. Not
             # terminal, so no final envelope: the next attempt's driver
             # emits a fresh ``running`` status.
@@ -630,7 +630,7 @@ class Worker:
         The driver's failure path (``streaming._RunMapper.finish``) emits the
         ``run.status`` ``failed`` envelope — ``error {code, message}`` —
         before re-raising, so a node's :class:`NodeTimeoutError`/
-        :class:`NodeError` (§2.4) is already in the log with the generic
+        :class:`NodeError` is already in the log with the generic
         ``node_error`` code. When the failure happened outside the driver
         (driver selection, a lifecycle hook) no envelope exists and the
         worker authors it here, with the stable per-type code.
@@ -679,14 +679,14 @@ class Worker:
         )
 
     def _context_for(self, record: RunRecord) -> VDreamerContext:
-        """The run identity bound for the implicit helpers (PRD §2.2).
+        """The run identity bound for the implicit helpers.
 
         ``idempotency_key`` is the ``run_id`` itself — stable across recovery
-        attempts (PRD §3.2/A6: an expired lease requeues the run and the
+        attempts (an expired lease requeues the run and the
         in-flight node re-executes from its checkpoint, so the side effects
         that re-run must dedupe on a key that does not vary with ``attempt``;
         an attempt-varying key could never make a re-executed effect
-        exactly-once). The run IS the effect's identity (§3.1: one run = one
+        exactly-once). The run IS the effect's identity (one run = one
         execution = one user turn).
 
         Within one run, call-site disambiguation — a graph calling the same
@@ -700,12 +700,12 @@ class Worker:
             run_id=record.id,
             thread_id=record.thread_id or record.id,
             agent_name=self._agent_name,
-            # The initiator (X-User-Id / X-User-Roles, D13) — §2.7: tools see
+            # The initiator (X-User-Id / X-User-Roles): tools see
             # the run's user and roles through ``runtime.context``.
             user_id=record.user_id,
             roles=tuple(record.roles),
             attempt=record.attempt,
-            # A6: stable per run — one run = one execution = one user turn.
+            # Stable per run — one run = one execution = one user turn.
             idempotency_key=record.id,
             headless=runs_headless(self._runner.agent, record.headless),
         )
@@ -719,7 +719,7 @@ class Worker:
     # -- SIGTERM (POSIX main thread only) ------------------------------------
 
     def _install_sigterm(self) -> None:
-        """SIGTERM → drain every active run, then stop (PRD §3.2).
+        """SIGTERM → drain every active run, then stop.
 
         POSIX main-thread only: ``signal.signal`` raises off the main thread,
         and on Windows ``SIGTERM`` exists but the OS never delivers it — so

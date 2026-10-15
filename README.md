@@ -13,9 +13,9 @@ You write an agent as a small Python class around a LangGraph graph (a `StateGra
 Python 3.11+. Add vdreamer to your project from the GitHub release (or your internal package index):
 
 ```bash
-pip install "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.0"
+pip install "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.1"
 # or, with uv:
-uv add "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.0"
+uv add "vdreamer @ git+https://github.com/Hamiedamr/vdreamer@v0.1.1"
 ```
 
 Optional extras, added as `vdreamer[postgres,minio]` and so on:
@@ -86,19 +86,28 @@ aliases:
     api_key_env: LLM_API_KEY      # optional: the *name* of the env var holding the key
 ```
 
-Keys never go in the file: `export LLM_API_KEY=...` and the alias reads it at startup. Leave `api_key_env` out for servers that need no key.
+Keys never go in `models.yaml`: put `LLM_API_KEY=...` in your `.env` (next step) and the alias reads it at startup. Leave `api_key_env` out for servers that need no key.
 
-**3. Check it, then serve it** from your project folder. The token is any secret of 16+ characters; your client sends it as a bearer token.
+**3. Put your settings in `.env`** in the project folder. Every `vdreamer` command reads it from the working directory (or the file `--env-file PATH` names); variables already set in your shell or deployment win. The token is any secret of 16+ characters; your client sends it as a bearer token.
 
 ```bash
-export VDREAMER_INTERNAL_TOKEN=change-me-to-a-long-secret
+# .env — keep it out of git
+VDREAMER_INTERNAL_TOKEN=change-me-to-a-long-secret
+LLM_API_KEY=sk-...        # only if your models.yaml names it
+```
+
+Add `.env` and `.vdreamer/` (where `vdreamer dev` keeps its data) to your `.gitignore`.
+
+**4. Check it, then serve it** from your project folder:
+
+```bash
 vdreamer validate my_agent:agent --models models.yaml
 vdreamer dev --agent my_agent:agent --models models.yaml
 ```
 
-`vdreamer dev` runs the API and a worker in one process, keeping everything in `./.vdreamer/dev.db` (add `.vdreamer/` to your `.gitignore`). Add `--reload` to restart on code changes.
+`vdreamer dev` runs the API and a worker in one process, keeping everything in `./.vdreamer/dev.db`. Add `--reload` to restart on code changes.
 
-**4. Talk to it.** From another terminal, with the same token:
+**5. Talk to it.** From another terminal in the same folder (it reads the same `.env`):
 
 ```bash
 vdreamer run weather --message "What's the weather in Cairo?"
@@ -117,7 +126,7 @@ It's always sunny in Cairo!
 Or open **http://127.0.0.1:8000/api/v1/docs** (Swagger UI; click *Authorize* and paste the token), or use plain HTTP:
 
 ```bash
-H=(-H "Authorization: Bearer $VDREAMER_INTERNAL_TOKEN" -H "X-User-Id: alice" -H "Content-Type: application/json")
+H=(-H "Authorization: Bearer change-me-to-a-long-secret" -H "X-User-Id: alice" -H "Content-Type: application/json")
 curl "${H[@]}" -X POST http://127.0.0.1:8000/api/v1/agents/weather/threads
 # → {"thread_id": "thread_…"}
 curl "${H[@]}" -X POST http://127.0.0.1:8000/api/v1/threads/<thread_id>/runs \
@@ -234,8 +243,10 @@ Secrets are never written in these files — only the names of environment varia
 
 ## Running in production
 
+Production settings are environment variables too — from your deployment, or a `.env` next to the agent code:
+
 ```bash
-export VDREAMER_PG_DSN=postgresql://vdreamer@db/vdreamer
+# VDREAMER_PG_DSN=postgresql://vdreamer@db/vdreamer, VDREAMER_INTERNAL_TOKEN=... in the environment or .env
 vdreamer migrate                                   # once, and after upgrades
 vdreamer serve  --agent my_agent:agent             # the API: stateless, run as many as you like
 vdreamer worker --agent my_agent:agent --models models.yaml --resources resources.yaml

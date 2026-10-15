@@ -1,6 +1,6 @@
 /* vdreamer docs shell: Swagger UI over the gateway's own OpenAPI 3.1 document.
  * validatorUrl: null keeps the badge validator from contacting its default
- * public host; the page CSP blocks every external origin regardless (PRD 5.2). */
+ * public host; the page CSP blocks every external origin regardless (zero egress). */
 /* Follow the viewer's light/dark preference with Swagger UI's own .dark-mode theme
  * (shipped in the vendored CSS); without it a dark browser shows Swagger's light-theme
  * text on a dark canvas. */

@@ -1,18 +1,18 @@
-"""``POST /agents/{name}/trigger`` — the headless entry (PRD §2.5, D15, A18, A26).
+"""``POST /agents/{name}/trigger`` — the headless entry.
 
 A trigger is a run started by a system, not a person in a chat: the caller is
-the Web Backend acting for a user, or an upstream service (A16, a service
+the Web Backend acting for a user, or an upstream service (a service
 token). It differs from ``POST /threads/{id}/runs`` in four ways:
 
 - ``Idempotency-Key`` is required. The run id is derived from
   ``(agent, caller, key)``, so a retry finds the run the first request made and
-  answers ``200`` with it instead of starting a second one (A18). Concurrent
+  answers ``200`` with it instead of starting a second one. Concurrent
   retries race on that id; the loser sees the winner's run.
 - the thread is created for the caller unless ``thread_id`` names one they own;
-- the run is *headless*: approvals need an ``approver_role`` (A16) and a
-  ``reject`` ends it ``rejected`` (§4.3);
+- the run is *headless*: approvals need an ``approver_role`` and a
+  ``reject`` ends it ``rejected``;
 - an optional ``callback`` URL is told when the run completes, fails, or raises
-  an interrupt — through the outbox (A26), to hosts on ``CALLBACK_ALLOWLIST``.
+  an interrupt — through the outbox, to hosts on ``CALLBACK_ALLOWLIST``.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ REPLAYED_HEADER = "Idempotent-Replayed"
 
 
 def trigger_run_id(agent: str, caller: str, key: str) -> str:
-    """The run id an idempotency key maps to (A18): the same key, from the same
+    """The run id an idempotency key maps to: the same key, from the same
     caller, for the same agent, is the same run."""
     digest = hashlib.sha256(f"{agent}\0{caller}\0{key}".encode()).hexdigest()
     return f"run_{digest[:32]}"
@@ -74,7 +74,7 @@ def _require_key(value: str | None) -> str:
         raise ApiError(
             400,
             ErrorCode.MISSING_IDEMPOTENCY_KEY,
-            "the Idempotency-Key header is required on /trigger (A18)",
+            "the Idempotency-Key header is required on /trigger",
         )
     if len(key) > MAX_KEY_LENGTH:
         raise ApiError(
@@ -86,7 +86,7 @@ def _require_key(value: str | None) -> str:
 
 
 async def _check_callback(url: str, settings: GatewaySettings) -> None:
-    """A26: a callback goes only to a host on ``CALLBACK_ALLOWLIST``.
+    """A callback goes only to a host on ``CALLBACK_ALLOWLIST``.
 
     A name off the host globs must resolve, now, only into the allowed networks
     — the same check delivery repeats — so a bad callback is a ``422`` here, not
@@ -97,7 +97,7 @@ async def _check_callback(url: str, settings: GatewaySettings) -> None:
         raise ApiError(
             422,
             ErrorCode.CALLBACK_NOT_ALLOWED,
-            "callbacks are off: CALLBACK_ALLOWLIST is not set on the gateway (A26)",
+            "callbacks are off: CALLBACK_ALLOWLIST is not set on the gateway",
         )
     try:
         parsed = check_url("callback", url, allowlist)
@@ -106,7 +106,7 @@ async def _check_callback(url: str, settings: GatewaySettings) -> None:
         raise ApiError(
             422,
             ErrorCode.CALLBACK_NOT_ALLOWED,
-            "the callback host is not on CALLBACK_ALLOWLIST (A26)",
+            "the callback host is not on CALLBACK_ALLOWLIST",
         ) from None
     except EndpointError:
         raise ApiError(
@@ -150,11 +150,11 @@ async def trigger_agent(
         str | None,
         Header(
             alias="Idempotency-Key",
-            description="Required. A retry with the same key returns the original run (A18).",
+            description="Required. A retry with the same key returns the original run.",
         ),
     ] = None,
 ) -> RunCreated:
-    """``{input, config?, thread_id?, callback?}`` → ``202 {run_id}`` (D15).
+    """``{input, config?, thread_id?, callback?}`` → ``202 {run_id}``.
 
     ``200`` with the original run when the ``Idempotency-Key`` was already
     used. ``400`` for a chat-only agent or a missing key; ``409`` when

@@ -1,4 +1,4 @@
-"""An agent's models and resources: config load, alias checks, open/close (§3.6, §3.7).
+"""An agent's models and resources: config load, alias checks, open/close.
 
 ``models.yaml`` (``--models`` or ``$VDREAMER_MODELS``) and
 ``resources.yaml`` (``--resources`` or ``$VDREAMER_RESOURCES``) are loaded
@@ -8,9 +8,9 @@ once per process (:func:`load_backend_config`). For one agent,
 1. checks every alias in ``BaseAgent.models`` / ``BaseAgent.resources`` is
    declared (MCP servers count as resources; they reach the agent as tools,
    ``ctx.tools.mcp(...)``);
-2. builds the chat models and loads the fastembed models once (A36);
+2. builds the chat models and loads the fastembed models once;
 3. probes the chat endpoints (the configured model must be served);
-4. opens and probes the pooled resource clients (A35);
+4. opens and probes the pooled resource clients;
 
 and yields the two :class:`~vdreamer.models.AliasMap` objects that become
 ``BuildContext.models`` / ``BuildContext.resources``. Everything opened is
@@ -81,7 +81,7 @@ def load_backend_config(
 
 
 def check_declared(agent: Any, config: BackendConfig) -> None:
-    """Every alias the agent declares exists (§3.6: unknown aliases fail)."""
+    """Every alias the agent declares exists (unknown aliases fail)."""
     models = list(getattr(agent, "models", ()) or ())
     unknown_models = missing_aliases(config.models, models)
     if unknown_models:

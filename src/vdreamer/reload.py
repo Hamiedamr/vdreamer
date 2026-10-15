@@ -1,10 +1,10 @@
-"""``vdreamer dev --reload`` — restart the dev process when its sources change (§2.3).
+"""``vdreamer dev --reload`` — restart the dev process when its sources change.
 
 A supervisor, not an in-process reloader: it runs ``python -m vdreamer dev …``
 (the same arguments, minus ``--reload``) as a child and restarts it when a
 watched file changes. Everything the child knew lives in the SQLite ``--db``
-file (D11), so a restart loses no thread, run or interrupt — a run in flight
-is recovered like any worker crash (A6).
+file, so a restart loses no thread, run or interrupt — a run in flight
+is recovered like any worker crash.
 
 Watched: ``*.py``, ``*.yaml``/``*.yml`` and ``*.json`` under the working
 directory, the ``PYTHONPATH`` entries, ``--agents-dir`` and the directories of

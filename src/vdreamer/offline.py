@@ -1,6 +1,6 @@
-"""Zero-egress runtime settings (PRD §5.2): applied by every ``vdreamer`` command.
+"""Zero-egress runtime settings: applied by every ``vdreamer`` command.
 
-The VM network policy is the authoritative control (A40); these settings make
+The VM network policy is the authoritative control; these settings make
 the libraries vdreamer loads never *try*: LangSmith tracing is forced off, the
 HuggingFace/Transformers stacks run offline, and every telemetry or
 update-check switch the dependency tree honours is turned off. They are
@@ -15,7 +15,7 @@ operator ships it and sets the variable. :func:`tiktoken_cache_problem`
 is what ``doctor --offline`` reports.
 
 ``vdreamer.models`` also sets the two HF variables right before it loads
-fastembed (A36), for library users who never go through the CLI.
+fastembed, for library users who never go through the CLI.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Final
 
-#: Forced before the stack is imported (§5.2). ``doctor --offline`` asserts each.
+#: Forced before the stack is imported. ``doctor --offline`` asserts each.
 OFFLINE_ENV: Final[dict[str, str]] = {
     # LangSmith tracing off (both spellings LangChain reads).
     "LANGSMITH_TRACING": "false",
     "LANGCHAIN_TRACING_V2": "false",
-    # HuggingFace hub / Transformers: never reach the hub (fastembed: A36).
+    # HuggingFace hub / Transformers: never reach the hub (fastembed loads local files only).
     "HF_HUB_OFFLINE": "1",
     "TRANSFORMERS_OFFLINE": "1",
     "HF_HUB_DISABLE_TELEMETRY": "1",

@@ -1,4 +1,4 @@
-"""The governed tool pipeline (PRD §2.7, A33, A37; Milestone 5).
+"""The governed tool pipeline.
 
 Every governed call — through :class:`GovernedTool` (``ctx.tools.govern``,
 ``ctx.tools.mcp``) or :class:`~vdreamer.tools.VDreamerToolMiddleware`
@@ -8,7 +8,7 @@ Every governed call — through :class:`GovernedTool` (``ctx.tools.govern``,
    by a role equal to it or an ``fnmatch`` pattern over it, e.g. ``db:*``)
    against the initiator's roles. A denial is contained (``denied``).
 2. **Emit ``tool.call``** — the model-visible args, redacted by policy keys
-   plus the defaults (A33). Injected args (``runtime``, state, store) never
+   plus the defaults. Injected args (``runtime``, state, store) never
    reach the event.
 3. **Approve** — an optional per-tool gate (``Policy.approval``) through
    :func:`~vdreamer.context.require_approval` with ``approve``/``reject``;
@@ -17,7 +17,7 @@ Every governed call — through :class:`GovernedTool` (``ctx.tools.govern``,
 4. **Execute** under ``timeout_s``. A ``side_effects=True`` tool sees
    ``ctx.idempotency_key`` = ``{run key}:{tool_call_id}`` — the model's call id
    is checkpointed, so a recovered attempt re-executing the call gets the same
-   key (A6).
+   key.
 5. **Normalize** — a returned ``vdreamer.Artifact`` (or a list of them, or one
    as the ``ToolMessage.artifact``) is stored like ``emit_artifact`` and the
    model gets a reference naming its ``artifact_id``. Text over
@@ -33,7 +33,7 @@ Every governed call — through :class:`GovernedTool` (``ctx.tools.govern``,
 
 The ``tool.call``/``tool.result`` records ride the run's custom stream like
 every other helper record (``context.emit_record``); the stream mapper
-(``vdreamer.streaming``, A31) turns them into envelopes and drops its own
+(``vdreamer.streaming``) turns them into envelopes and drops its own
 ungoverned mapping for those call ids — governed tools are the single emitter.
 """
 
@@ -89,9 +89,9 @@ SOURCE_METADATA_KEY: Final = "vdreamer_source"
 
 ErrorCode = Literal["tool_error", "timeout", "denied", "transport", "invalid_args"]
 
-#: ``json`` artifacts hold at most 1 MB (§3.4); larger JSON results are files.
+#: ``json`` artifacts hold at most 1 MB; larger JSON results are files.
 JSON_ARTIFACT_MAX_BYTES: Final = 1024 * 1024
-#: A ``json`` artifact's SSE preview carries the full body up to 64 KB (§3.4).
+#: A ``json`` artifact's SSE preview carries the full body up to 64 KB.
 JSON_PREVIEW_MAX_BYTES: Final = 64 * 1024
 #: ``tool.result`` summaries and error messages are capped here.
 SUMMARY_MAX_CHARS: Final = 8000
@@ -134,7 +134,7 @@ def _is_langchain_module(module: str) -> bool:
 
 
 def tool_source(tool: BaseTool) -> str:
-    """``custom | langchain | mcp:{server}`` (§3.3 ``tool.call.source``).
+    """``custom | langchain | mcp:{server}`` (``tool.call.source``).
 
     An explicit ``metadata["vdreamer_source"]`` wins (MCP tools carry one).
     A ``@vdreamer.tool`` is ``custom``; so is a plain ``@tool`` over the
@@ -196,7 +196,7 @@ def _invalid_args(tool: BaseTool, args: Mapping[str, Any]) -> str | None:
     try:
         schema.model_validate(dict(args))
     except pydantic.ValidationError as exc:
-        # include_input=False: the offending values may be the secrets A33 masks.
+        # include_input=False: the offending values may be the secrets masks.
         problems = [
             f"{'.'.join(str(part) for part in error['loc']) or '(args)'}: {error['msg']}"
             for error in exc.errors(include_input=False, include_url=False)
@@ -468,7 +468,7 @@ def _emit(record: dict[str, Any]) -> None:
 
 
 def _call_context(ctx: VDreamerContext | None, call: GovernedCall) -> VDreamerContext | None:
-    """The context the tool executes under: a per-call key for side effects (A6)."""
+    """The context the tool executes under: a per-call key for side effects."""
     if ctx is None or not call.policy.side_effects:
         return ctx
     base = ctx.idempotency_key or ctx.run_id
@@ -574,7 +574,7 @@ class _Pipeline:
         metrics.TOOL_LATENCY.labels(source=call.source).observe(time.monotonic() - self.started)
         metrics.TOOL_ERRORS.labels(source=call.source, code=failure.code).inc()
         # Exceptions echo what they were given: mask the call's secrets in the
-        # message (A33) before the model, the event log or the client see it.
+        # message before the model, the event log or the client see it.
         message = redact_text(failure.message, call.args, call.policy.redact)
         reply = failure.reply or ToolMessage(
             content=f"Error ({failure.code}): {message}",
@@ -705,8 +705,8 @@ def _unwrap(result: Any, from_model: bool) -> Any:
 
 
 class GovernedTool(BaseTool):
-    """A governance proxy around one ``BaseTool`` (A37): same name, description,
-    and schema, every call through the §2.7 pipeline.
+    """A governance proxy around one ``BaseTool``: same name, description,
+    and schema, every call through the pipeline.
 
     LangGraph's ``ToolNode`` reads injection needs (``runtime``, state, store)
     from ``get_input_schema()`` and the function's annotations, so both are
@@ -844,7 +844,7 @@ def is_governed(tool: Any) -> bool:
 
 
 class ToolKit:
-    """``BuildContext.tools`` (PRD §2.2, §2.7): govern tools, select MCP tools.
+    """``BuildContext.tools``: govern tools, select MCP tools.
 
     ``govern`` wraps each tool in a :class:`GovernedTool` with its effective
     policy — the decorator's, overlaid by the agent's ``tool_policies`` — and

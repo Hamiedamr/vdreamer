@@ -72,7 +72,7 @@ def test_bad_entries_are_refused(entry: dict[str, Any], fragment: str) -> None:
 
 
 def test_inline_secrets_are_refused_at_load() -> None:
-    with pytest.raises(ResourcesError, match="A23"):
+    with pytest.raises(ResourcesError, match="secret in YAML"):
         parse_resources({"netinv": {"type": "mcp", "url": "https://h/mcp", "token": "abc"}})
 
 

@@ -1,6 +1,6 @@
-"""Governed-tool primitives (PRD §2.7, A33, A37–A40).
+"""Governed-tool primitives.
 
-vdreamer adds no tool base class (A37): every tool — custom, ecosystem, or
+vdreamer adds no tool base class: every tool — custom, ecosystem, or
 MCP — stays a plain LangChain ``BaseTool``. Governance is *data*, a
 :class:`Policy` stored under ``tool.metadata["vdreamer"]``, plus *wrappers*
 (:class:`VDreamerToolMiddleware` hooks ``create_agent`` tool calls;
@@ -8,10 +8,10 @@ MCP — stays a plain LangChain ``BaseTool``. Governance is *data*, a
 schema because they wrap and never rewrite.
 
 This module is the contract: the policy dataclasses, argument redaction
-(A33), policy resolution, the ``@tool`` decorator, and the ``create_agent``
-middleware. The seven-step governance pipeline of §2.7 — authorize → emit
+, policy resolution, the ``@tool`` decorator, and the ``create_agent``
+middleware. The seven-step governance pipeline — authorize → emit
 ``tool.call`` → approval gate → execute under timeout → normalize → contain
-errors → emit ``tool.result`` — lives in ``vdreamer.governance`` (Milestone 5)
+errors → emit ``tool.result`` — lives in ``vdreamer.governance``
 and consumes exactly the Policy/metadata types defined here.
 """
 
@@ -37,19 +37,19 @@ if TYPE_CHECKING:
 
 
 VDREAMER_METADATA_KEY: Final = "vdreamer"
-"""Metadata dict key under which a tool's :class:`Policy` is stored (PRD §2.7)."""
+"""Metadata dict key under which a tool's :class:`Policy` is stored."""
 
 
 @dataclass(frozen=True)
 class ApprovalSpec:
-    """Approval requirements for one tool (PRD §4.1, attached via ``Policy.approval``).
+    """Approval requirements for one tool (attached via ``Policy.approval``).
 
     Mirrors the fields a per-tool approval needs from the HITL SDK: ``kind``
     is the renderer hint, ``approver_role`` gates who may resolve (required in
-    headless runs, A16), ``scope`` names what is being approved, and
-    ``ttl_hours`` bounds how long the interrupt stays resolvable. Milestone 8
-    turns this into a real gate via ``require_approval``; until then it is
-    declarative data that travels with the tool.
+    headless runs), ``scope`` names what is being approved, and
+    ``ttl_hours`` bounds how long the interrupt stays resolvable. The
+    governance pipeline turns it into a real gate via
+    ``require_approval``.
     """
 
     kind: str
@@ -60,18 +60,18 @@ class ApprovalSpec:
 
 @dataclass(frozen=True)
 class Policy:
-    """Governance policy for one tool (PRD §2.7).
+    """Governance policy for one tool.
 
     Stored JSON-safe in ``tool.metadata["vdreamer"]`` by :func:`tool` and
     rebuilt with :meth:`from_metadata`. Every field feeds one governance step
     (see :class:`VDreamerToolMiddleware` for the pipeline they will drive):
 
     - ``redact``: argument keys masked in ``tool.call`` events (plus
-      ``DEFAULT_REDACT_KEYS`` always, A33).
+      ``DEFAULT_REDACT_KEYS`` always).
     - ``timeout_s``: execution timeout (default 60).
     - ``side_effects``: run the call under ``ctx.idempotency_key`` for safe
-      retries (A6).
-    - ``approval``: optional per-tool approval gate (§4.1).
+      retries.
+    - ``approval``: optional per-tool approval gate.
     - ``max_result_chars``: results over this become an artifact and the
       model receives a truncated body (default 8,000).
     - ``fail_run``: contain a tool failure as an error ``ToolMessage``
@@ -148,7 +148,7 @@ class Policy:
 
 @dataclass(frozen=True)
 class InterruptPolicy:
-    """HITL policy overrides for non-vdreamer interrupt sources (PRD §4.5, A44).
+    """HITL policy overrides for non-vdreamer interrupt sources.
 
     ``BaseAgent.interrupt_policies`` maps a source — keyed by ``kind``
     (``"tool_review"``, ``"mcp_elicitation"``, ``"generic"``) or by tool
@@ -163,7 +163,7 @@ class InterruptPolicy:
 
 
 DEFAULT_REDACT_KEYS: Final = ("password", "token", "secret", "api_key", "authorization")
-"""Argument keys always redacted from ``tool.call`` events (A33: redaction =
+"""Argument keys always redacted from ``tool.call`` events (redaction =
 policy keys plus these defaults)."""
 
 _REDACTED: Final = "***"
@@ -171,7 +171,7 @@ _POLICY_DEFAULTS: Final = Policy()
 
 
 def _redact_value(value: Any, masked: frozenset[str]) -> Any:
-    """Recursively mask sensitive keys in nested dicts/lists (A33)."""
+    """Recursively mask sensitive keys in nested dicts/lists."""
     if isinstance(value, dict):
         return {
             key: _REDACTED
@@ -193,7 +193,7 @@ def redact_args(args: Mapping[str, Any], keys: Iterable[str] | None = None) -> d
     case-insensitively equals a key in ``keys`` **or** in
     :data:`DEFAULT_REDACT_KEYS` has its value replaced with ``"***"``. The
     input mapping is never mutated; scalars and unknown objects pass through
-    unchanged (repr-safety of exotic objects is M5's concern).
+    unchanged (repr-safety of exotic objects is concern).
     """
     masked = {key.lower() for key in DEFAULT_REDACT_KEYS}
     if keys is not None:
@@ -222,7 +222,7 @@ _MIN_SECRET_CHARS: Final = 4
 def redact_text(
     text: str, args: Mapping[str, Any] | None = None, keys: Iterable[str] | None = None
 ) -> str:
-    """Mask secrets inside free text — an error message, a summary (A33).
+    """Mask secrets inside free text — an error message, a summary.
 
     The same keys as :func:`redact_args` apply twice: a ``key=value`` /
     ``key: value`` pair naming one of them has its value masked, and the
@@ -282,7 +282,7 @@ def _govern_tool(candidate: Any, policy: Policy) -> BaseTool:
     """Attach ``policy`` to a built tool, preserving unrelated metadata.
 
     The candidate must already be a LangChain ``BaseTool`` — vdreamer never
-    wraps tools in another class (A37); governance travels as metadata.
+    wraps tools in another class; governance travels as metadata.
     """
     if not isinstance(candidate, BaseTool):
         msg = (
@@ -336,7 +336,7 @@ def tool(
     policy: Policy | None = None,
     **tool_kwargs: Any,
 ) -> BaseTool | Callable[[Callable[..., Any] | Runnable[Any, Any]], BaseTool]:
-    """``langchain.tools.tool`` plus a vdreamer :class:`Policy` (PRD §2.7).
+    """``langchain.tools.tool`` plus a vdreamer :class:`Policy`.
 
     A drop-in for ``@tool``: ``@vdreamer.tool`` (no parens) and the
     configured ``@vdreamer.tool(...)``, with ``name``/``description``/
@@ -344,7 +344,7 @@ def tool(
     that the produced tool carries ``metadata["vdreamer"] =
     policy.to_metadata()`` (merged, so unrelated metadata keys survive).
 
-    Governance kwargs (defaults per §2.7): ``redact``, ``timeout_s`` (60),
+    Governance kwargs (defaults): ``redact``, ``timeout_s`` (60),
     ``side_effects``, ``approval``, ``max_result_chars`` (8,000),
     ``fail_run``, ``scope``, ``requires_roles``.
 
@@ -422,7 +422,7 @@ def tool(
 
 
 class VDreamerToolMiddleware(AgentMiddleware[Any, Any, Any]):
-    """Tool-governance middleware for ``create_agent`` graphs (PRD §2.7, A37).
+    """Tool-governance middleware for ``create_agent`` graphs.
 
     ``ctx.agent_kwargs()`` adds one, built with the agent's ``tool_policies``;
     every tool call the agent makes then runs the seven-step pipeline of
@@ -433,7 +433,7 @@ class VDreamerToolMiddleware(AgentMiddleware[Any, Any, Any]):
     ``governance.GovernedTool`` from ``ctx.tools.govern`` / ``ctx.tools.mcp``)
     passes straight through: the proxy governs it, exactly once.
 
-    A37: the tool's name and schema are preserved because this middleware
+    The tool's name and schema are preserved because this middleware
     *wraps* calls — it never rewrites the ``BaseTool``, its name, or its args
     schema. ``awrap_tool_call`` is the hook vdreamer's async runtime exercises;
     ``wrap_tool_call`` keeps plain synchronous ``invoke`` working.

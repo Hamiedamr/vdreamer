@@ -1,4 +1,4 @@
-"""``ApprovalGate`` — the prebuilt approval subgraph (PRD §4.1).
+"""``ApprovalGate`` — the prebuilt approval subgraph.
 
 ``prepare → gate → {approve|edit: execute, reject: on_reject, feedback: replan}``
 
@@ -8,7 +8,7 @@ the resolution with a ``Command``, so the agent's state needs no routing key:
 - ``approve`` → ``execute``;
 - ``edit`` → the edited payload (validated against ``edit_schema`` by the
   gateway and again in the gate) is written to state first, then ``execute``
-  runs on the edited state (§4.3: "written to state before execution");
+  runs on the edited state ("written to state before execution");
 - ``reject`` → ``on_reject`` (chat; the conversation goes on). In a headless
   run the gateway ends the run ``rejected`` instead and nothing resumes;
 - ``feedback`` → ``replan``, which reads the reviewer's text from
@@ -16,7 +16,7 @@ the resolution with a ``Command``, so the agent's state needs no routing key:
 
 ``execute``, ``on_reject`` and ``replan`` then end the subgraph (``replan``
 loops). Pre-work belongs in ``prepare``: a resume restarts the gate node from
-the top (§4.1), never ``prepare``.
+the top, never ``prepare``.
 
 ``vdreamer validate`` finds every gate in an agent's graph (subgraphs
 included) through its node metadata and flags offered actions with no node
@@ -39,7 +39,7 @@ __all__ = ["APPROVAL_GATE_METADATA_KEY", "ApprovalGate", "approval_gates"]
 #: Node-metadata key marking an ``ApprovalGate``'s gate node (read by ``validate``).
 APPROVAL_GATE_METADATA_KEY: Final[str] = "vdreamer_approval_gate"
 
-#: The actions a gate routes; ``respond`` answers a tool, not a gate (§4.3).
+#: The actions a gate routes; ``respond`` answers a tool, not a gate.
 _GATE_ACTIONS: Final[frozenset[str]] = frozenset({"approve", "edit", "reject", "feedback"})
 
 #: The node each action routes to.
@@ -54,7 +54,7 @@ Node = Callable[..., Any]
 
 
 class ApprovalGate:
-    """A prebuilt ``prepare → gate → {execute, on_reject, replan}`` subgraph (§4.1).
+    """A prebuilt ``prepare → gate → {execute, on_reject, replan}`` subgraph.
 
     Args:
         state_schema: the state the subgraph runs on (usually the agent's own).
@@ -65,7 +65,7 @@ class ApprovalGate:
         on_reject: the chat ``reject`` route.
         replan: the ``feedback`` route; reads the text from ``state[decision_key]``.
         actions: offered actions, default ``approve, reject, edit, feedback``.
-        approver_role / scope / ttl_hours: the approval policy (§4.1, A16, A32).
+        approver_role / scope / ttl_hours: the approval policy.
         edit_schema: pydantic model for ``edit`` payloads; its fields are state keys.
         decision_key: a state key that receives the full resolution
             ``{action, payload?, text?}`` — required when ``feedback`` routes
@@ -131,7 +131,7 @@ class ApprovalGate:
     def unwired(self, *, headless: bool = False) -> list[str]:
         """Offered actions with no node wired (``validate``'s ``approval.routes``).
 
-        A headless ``reject`` needs no route: the run ends ``rejected`` (§4.3).
+        A headless ``reject`` needs no route: the run ends ``rejected``.
         """
         return [
             action

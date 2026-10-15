@@ -1,6 +1,6 @@
-"""``NETWORK_ALLOWLIST`` (PRD §5.2, A40): the declared-endpoint check.
+"""``NETWORK_ALLOWLIST``: the declared-endpoint check.
 
-The VM network policy is the authoritative control (A40); this list is
+The VM network policy is the authoritative control; this list is
 defense in depth. Every declared endpoint — a model ``base_url``
 (``models.yaml``), a resource ``url``/``uri`` and an MCP ``url``
 (``resources.yaml``) — must match it at config load (:meth:`check_config`,
@@ -24,14 +24,14 @@ from vdreamer.resources import ResourcesError
 
 NETWORK_ALLOWLIST_ENV: Final = "NETWORK_ALLOWLIST"
 
-#: Where run callbacks (A26) and the outbox may POST — same syntax as ``NETWORK_ALLOWLIST``.
+#: Where run callbacks and the outbox may POST — same syntax as ``NETWORK_ALLOWLIST``.
 CALLBACK_ALLOWLIST_ENV: Final = "CALLBACK_ALLOWLIST"
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 class EndpointError(ResourcesError):
-    """A declared endpoint is malformed or carries credentials (A23)."""
+    """A declared endpoint is malformed or carries credentials."""
 
 
 class EndpointNotAllowed(EndpointError):
@@ -123,13 +123,13 @@ def check_url(
     *,
     schemes: Sequence[str] = ("http", "https"),
 ) -> urllib.parse.SplitResult:
-    """A URL with a host, no inline credentials (A23), and an allowed host (A40)."""
+    """A URL with a host, no inline credentials, and an allowed host."""
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in schemes or not parsed.hostname:
         raise EndpointError(f"{label}: {url!r} must be a {'/'.join(schemes)} URL with a host")
     if parsed.username or parsed.password:
         raise EndpointError(
-            f"{label}: credentials in the URL put a secret in YAML (A23); use the *_env keys"
+            f"{label}: credentials in the URL put a secret in YAML; use the *_env keys"
         )
     if allowlist is not None:
         try:

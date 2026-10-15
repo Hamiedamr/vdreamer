@@ -2,7 +2,7 @@
 #
 # Jobs:
 #   locked          — the committed uv.lock is the source of truth: lint, type-check,
-#                      full test suite. Also proves `uv sync --locked --extra postgres`
+#                      full test suite, on Python 3.11 and 3.12. Also proves `uv sync --locked --extra postgres`
 #                      works from a clean checkout (Milestone-0 exit criterion).
 #   floor           — `uv lock --resolution lowest-direct` (NOT committed): smoke
 #                      tests and the UC1–UC3 reference agents (tests/acceptance)
@@ -38,13 +38,21 @@ env:
 
 jobs:
   locked:
-    name: locked (uv.lock)
+    name: locked (uv.lock, Python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every Python the package claims (pyproject classifiers); the other jobs
+        # stay on .python-version (3.11), the floor.
+        python: ["3.11", "3.12"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}  # overrides .python-version for uv
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true

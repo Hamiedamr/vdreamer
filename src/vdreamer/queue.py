@@ -1,6 +1,6 @@
-"""The run queue: the ``runs`` table, the §3.2 lifecycle, claims and leases.
+"""The run queue: the ``runs`` table, the lifecycle, claims and leases.
 
-Milestone 3 (WP1). PRD §3.2 is the whole spec:
+In short:
 
 - lifecycle ``queued → running → (awaiting_approval → running)* → completed |
   failed | rejected | expired | cancelled`` (``RunState`` and
@@ -8,18 +8,18 @@ Milestone 3 (WP1). PRD §3.2 is the whole spec:
 - claiming via ``FOR UPDATE SKIP LOCKED`` with a 10 s lease heartbeat
   (``LEASE_INTERVAL_S``),
 - crash recovery: an expired lease requeues the run — at most ``MAX_ATTEMPTS``
-  attempts — and the in-flight node re-executes from the checkpoint (A6),
+  attempts — and the in-flight node re-executes from the checkpoint,
 - cancel and approvals: ``awaiting_approval`` holds no lease (approvals free
-  the worker); ``cancel`` marks the row while WP2's ``RunControl`` drains the
+  the worker); ``cancel`` marks the row while ``RunControl`` drains the
   live worker.
 
-Postgres is the only gateway↔worker transport (A7): gateway and worker meet
+Postgres is the only gateway↔worker transport: gateway and worker meet
 on the same ``runs`` rows, never over a direct API. ``InMemoryRunQueue``
-backs the tests and ``vdreamer dev`` (D11); ``PostgresRunQueue`` is the
+backs the tests and ``vdreamer dev``; ``PostgresRunQueue`` is the
 production queue and mirrors ``PostgresEventLog``'s lazy-psycopg seam.
 
-Consumers: the worker loop (WP2), the gateway's ``409 {active_run_id,
-reason}`` render (M4), and ``migrate`` (WP3), which reuses :data:`RUNS_DDL`.
+Consumers: the worker loop, the gateway's ``409 {active_run_id,
+reason}`` render, and ``migrate``, which reuses :data:`RUNS_DDL`.
 """
 
 from __future__ import annotations
@@ -38,11 +38,11 @@ from typing import Any, Final, TypeAlias
 from vdreamer.persistence import MissingPostgresDependencyError
 
 
-#: The run lifecycle (PRD §3.2):
+#: The run lifecycle:
 #: ``queued → running → (awaiting_approval → running)* → completed | failed |
 #: rejected | expired | cancelled``.
 class RunState(enum.StrEnum):
-    """One run status; the members are exactly PRD §3.2's states."""
+    """One run status; the members are exactly states."""
 
     QUEUED = "queued"
     RUNNING = "running"
@@ -55,18 +55,18 @@ class RunState(enum.StrEnum):
 
 
 #: The statuses that occupy a thread — the one-active-run-per-thread guard
-#: (D12/A11) and the partial index in :data:`RUNS_DDL` cover exactly these.
+#: and the partial index in :data:`RUNS_DDL` cover exactly these.
 ACTIVE_STATES: Final[frozenset[RunState]] = frozenset(
     {RunState.QUEUED, RunState.RUNNING, RunState.AWAITING_APPROVAL}
 )
 
-#: The subset ``?wait_for_idle=true`` queues behind (PRD §2.5: "queues behind
+#: The subset ``?wait_for_idle=true`` queues behind ("queues behind
 #: ``running`` only"). A run already ``queued`` ahead is nothing to wait on.
 WAITABLE_STATES: Final[frozenset[RunState]] = frozenset(
     {RunState.RUNNING, RunState.AWAITING_APPROVAL}
 )
 
-#: The final statuses — no transition leaves them (PRD §3.2).
+#: The final statuses — no transition leaves them.
 TERMINAL_STATES: Final[frozenset[RunState]] = frozenset(
     {
         RunState.COMPLETED,
@@ -77,22 +77,22 @@ TERMINAL_STATES: Final[frozenset[RunState]] = frozenset(
     }
 )
 
-#: Lease window for one claim; the worker heartbeats inside it (PRD §3.2).
+#: Lease window for one claim; the worker heartbeats inside it.
 LEASE_INTERVAL_S: Final[float] = 10.0
 
 #: Recovery ceiling: ``requeue_expired`` expires a run whose ``attempt`` has
-#: reached this (PRD §3.2: "requeue with attempt+1 (max 3)").
+#: reached this ("requeue with attempt+1 (max 3)").
 MAX_ATTEMPTS: Final[int] = 3
 
-#: The §3.2 lifecycle as a from→allowed-targets map; terminal states map to
+#: The lifecycle as a from→allowed-targets map; terminal states map to
 #: nothing (they are final). ``rejected`` and ``expired`` are reachable from
-#: ``running`` because §3.2's terminal line follows the
+#: ``running`` because terminal line follows the
 #: ``(awaiting_approval → running)*`` loop (``requeue_expired`` expires an
 #: exhausted run), and from ``awaiting_approval`` because no worker holds a
-#: waiting run: the gateway rejects it on a headless ``reject`` (§4.3) and the
-#: expiry sweeper expires it once its interrupt lapses (§4.4).
+#: waiting run: the gateway rejects it on a headless ``reject`` and the
+#: expiry sweeper expires it once its interrupt lapses.
 #: ``running → queued`` is deliberately absent: returning a lost run to the
-#: queue is the recovery sweep's *requeue* (the PRD's own word), not a
+#: queue is the recovery sweep's *requeue*, not a
 #: lifecycle step — see ``RunQueue.requeue_expired``.
 _ALLOWED_TRANSITIONS: Final[Mapping[RunState, frozenset[RunState]]] = {
     RunState.QUEUED: frozenset({RunState.RUNNING, RunState.CANCELLED}),
@@ -120,8 +120,8 @@ _ALLOWED_TRANSITIONS: Final[Mapping[RunState, frozenset[RunState]]] = {
 class ActiveRunConflict(Exception):
     """The thread already has an active run and the caller did not queue behind.
 
-    D12/A11: the gateway renders this as ``409 {active_run_id, reason}``
-    (PRD §2.5).
+    The gateway renders this as ``409 {active_run_id, reason}``
+   .
     """
 
     def __init__(self, active_run_id: str, reason: str = "thread_has_active_run") -> None:
@@ -131,7 +131,7 @@ class ActiveRunConflict(Exception):
 
 
 class InvalidTransition(Exception):
-    """A run-status change outside the §3.2 lifecycle map.
+    """A run-status change outside the lifecycle map.
 
     ``from_state`` is ``None`` when the source state could not be determined
     (the Postgres guard matched no row: run missing or not in the required
@@ -152,24 +152,24 @@ Clock: TypeAlias = Callable[[], float]
 
 @dataclass(frozen=True)
 class RunRecord:
-    """One row of ``runs`` (PRD §3.2).
+    """One row of ``runs``.
 
     Timestamps are plain floats from the backend's clock — the in-memory
     queue's injectable clock, epoch seconds for Postgres.
 
     The Milestone-4 columns carry what the gateway knows at enqueue time:
     ``user_id`` / ``roles`` are the initiator's identity (``X-User-Id`` /
-    ``X-User-Roles``, D13) — the worker binds them into the run's
-    ``VDreamerContext`` (§2.7) and approval authority defaults to the
-    initiator (§4.3); ``config`` is the validated ``{input, config?}`` run
-    config (§2.5); ``resume`` is the resume map ``{interrupt_id: value}`` an
-    interrupt resolution plants before requeueing (§3.2: "resolution enqueues
+    ``X-User-Roles``) — the worker binds them into the run's
+    ``VDreamerContext`` and approval authority defaults to the
+    initiator; ``config`` is the validated ``{input, config?}`` run
+    config; ``resume`` is the resume map ``{interrupt_id: value}`` an
+    interrupt resolution plants before requeueing ("resolution enqueues
     a resume") — the worker turns it into ``Command(resume=...)``.
 
-    The Milestone-9 columns belong to ``/trigger`` runs (D15): ``callback`` is
-    the URL the outbox reports ``completed|failed|interrupt`` to (A26), and
+    The Milestone-9 columns belong to ``/trigger`` runs: ``callback`` is
+    the URL the outbox reports ``completed|failed|interrupt`` to, and
     ``headless`` marks a run whose approvals have no one in front of them —
-    true for every ``/trigger`` run, even of a ``BOTH`` agent (A16, §4.3).
+    true for every ``/trigger`` run, even of a ``BOTH`` agent.
     """
 
     id: str
@@ -191,12 +191,12 @@ class RunRecord:
 
 
 def _new_run_id() -> str:
-    """A fresh run id — one execution is one ``run_id`` (PRD §3.1)."""
+    """A fresh run id — one execution is one ``run_id``."""
     return f"run_{uuid.uuid4().hex}"
 
 
 class RunQueue(abc.ABC):
-    """The queue operations the worker (WP2) and the gateway (M4) need.
+    """The queue operations the worker and the gateway need.
 
     Every method is a single async step; backends implement the atomicity
     (the in-memory queue holds an asyncio lock, Postgres relies on row locks
@@ -221,13 +221,13 @@ class RunQueue(abc.ABC):
         """Create a ``queued`` run and return its record.
 
         ``run_id`` may be supplied (the gateway does, for ``/trigger``
-        replay, A18: the id is derived from the idempotency key, so a second
+        replay: the id is derived from the idempotency key, so a second
         enqueue of the same key finds the id taken and raises ``ValueError``);
         ``None`` generates one. ``user_id`` / ``roles`` / ``config`` /
         ``callback`` / ``headless`` are stored on the row as-is (see
         :class:`RunRecord`).
         The one-active-run-per-thread
-        guard (D12/A11): when the thread already has a run in an active
+        guard: when the thread already has a run in an active
         state, the call conflicts — unless ``wait_for_idle`` is set *and*
         every active run of the thread is :data:`WAITABLE_STATES`
         (``running``/``awaiting_approval``), in which case the new run is
@@ -237,7 +237,7 @@ class RunQueue(abc.ABC):
 
         Raises:
             ActiveRunConflict: the thread is busy and the caller did not
-                wait (the gateway renders 409, PRD §2.5).
+                wait (the gateway renders 409).
         """
 
     @abc.abstractmethod
@@ -247,7 +247,7 @@ class RunQueue(abc.ABC):
         A run is claimable when its thread has no run in ``running`` or
         ``awaiting_approval`` — that is what makes a ``wait_for_idle`` run
         wait. ``agent`` restricts the claim to that agent's runs: one worker
-        serves one agent (§2.1), and every agent's workers share the one
+        serves one agent, and every agent's workers share the one
         ``runs`` table, so a worker must never claim another agent's run.
         ``None`` claims any agent's run (single-agent tests). The claim
         stamps ``claimed_by``, sets
@@ -260,7 +260,7 @@ class RunQueue(abc.ABC):
         """Extend a running run's lease by :data:`LEASE_INTERVAL_S`.
 
         ``False`` means the run is gone or no longer ``running`` — the
-        worker must drain (WP2) instead of continuing blind.
+        worker must drain instead of continuing blind.
         """
 
     @abc.abstractmethod
@@ -270,7 +270,7 @@ class RunQueue(abc.ABC):
         ``status`` must be terminal: ``completed``/``failed`` from
         ``running``, ``rejected``/``expired`` from ``running`` or
         ``awaiting_approval`` (the gateway's headless reject and the expiry
-        sweeper, §4.3–§4.4), or ``cancelled`` from any active state (the
+        sweeper), or ``cancelled`` from any active state (the
         ``cancel`` method is the friendlier spelling of the latter).
 
         Raises:
@@ -282,7 +282,7 @@ class RunQueue(abc.ABC):
     async def suspend(self, run_id: str) -> None:
         """``running → awaiting_approval``, clearing the lease.
 
-        Approvals free the worker (PRD §3.2) — nothing is held while the run
+        Approvals free the worker — nothing is held while the run
         waits for a human.
 
         Raises:
@@ -295,7 +295,7 @@ class RunQueue(abc.ABC):
 
         The stale claim is cleared; the next claim stamps a fresh one.
         ``resume`` — the resume map ``{interrupt_id: value}`` the gateway built
-        from the resolutions (§4.3) — is stored on the row for the worker's
+        from the resolutions — is stored on the row for the worker's
         ``Command(resume=...)``; ``None`` keeps whatever the row carries.
 
         Raises:
@@ -309,22 +309,22 @@ class RunQueue(abc.ABC):
         Any active state (``queued``, ``running``, ``awaiting_approval``)
         may be cancelled. The prior status tells the caller who owes the
         run's final ``run.status`` event: a ``running`` run's worker notices
-        on its next heartbeat and drains (WP2's ``RunControl``), emitting it;
+        on its next heartbeat and drains (``RunControl``), emitting it;
         a ``queued`` or ``awaiting_approval`` run has no worker, so the
-        gateway emits it (M4).
+        gateway emits it.
         """
 
     @abc.abstractmethod
     async def list_for_thread(self, thread_id: str) -> list[RunRecord]:
         """Every run of ``thread_id``, oldest first (``created_at``, ``id``).
 
-        The gateway's thread views (§2.5): ``GET /threads/{id}`` lists them and
+        The gateway's thread views: ``GET /threads/{id}`` lists them and
         ``GET /threads/{id}/events`` joins the active — else the latest — one.
         """
 
     @abc.abstractmethod
     async def count_by_status(self) -> dict[RunState, int]:
-        """Run counts per status — the ``queue depth`` metric (§5.4).
+        """Run counts per status — the ``queue depth`` metric.
 
         Statuses with no runs are omitted.
         """
@@ -333,14 +333,14 @@ class RunQueue(abc.ABC):
     async def release(self, run_id: str) -> None:
         """``running → queued``: the SIGTERM drain path, attempt not consumed.
 
-        PRD §3.2: "On worker SIGTERM, every active run is drained and requeued
+        By design, "on worker SIGTERM, every active run is drained and requeued
         without consuming an attempt." The claim that started the current
         attempt is given back — ``attempt`` is decremented to its pre-claim
         value and the lease and claim are cleared — so the next claim
         re-increments to the same number and the run resumes from its
         checkpoint. Like ``requeue_expired`` this is a recovery-style requeue,
-        not a §3.2 lifecycle step (``_ALLOWED_TRANSITIONS`` has no
-        ``running → queued``); it is the WP2 worker's drain handler, the
+        not a lifecycle step (``_ALLOWED_TRANSITIONS`` has no
+        ``running → queued``); it is the worker's drain handler, the
         counterpart of the sweep's expired-lease requeue.
 
         Raises:
@@ -353,19 +353,19 @@ class RunQueue(abc.ABC):
 
     @abc.abstractmethod
     async def requeue_expired(self) -> int:
-        """Recovery sweep (PRD §3.2): handle every expired-lease run.
+        """Recovery sweep: handle every expired-lease run.
 
         Finds ``running`` runs whose ``lease_expires_at`` has lapsed. A run
         with ``attempt >= MAX_ATTEMPTS`` is dead → ``expired``; otherwise it
         returns to ``queued`` with the lease cleared — the in-flight node
         re-executes from its checkpoint on resume, so side effects use
-        ``ctx.idempotency_key`` (A6). ``attempt`` is unchanged here; it
+        ``ctx.idempotency_key``. ``attempt`` is unchanged here; it
         increments on claim. Returns how many runs were handled.
         """
 
 
 class InMemoryRunQueue(RunQueue):
-    """Dict-backed queue behind an asyncio lock — tests and ``vdreamer dev`` (D11).
+    """Dict-backed queue behind an asyncio lock — tests and ``vdreamer dev``.
 
     The ``clock`` callable (default ``time.monotonic``) produces every stored
     timestamp (``created_at``/``updated_at``/``lease_expires_at``), so tests
@@ -378,7 +378,7 @@ class InMemoryRunQueue(RunQueue):
         self._lock = asyncio.Lock()
 
     def _transition(self, run: RunRecord, to: RunState, now: float) -> RunRecord:
-        """Apply one §3.2 lifecycle step, raising ``InvalidTransition`` otherwise."""
+        """Apply one lifecycle step, raising ``InvalidTransition`` otherwise."""
         if to not in _ALLOWED_TRANSITIONS[run.status]:
             raise InvalidTransition(run.id, run.status, to)
         return replace(run, status=to, updated_at=now)
@@ -498,7 +498,7 @@ class InMemoryRunQueue(RunQueue):
             if run is None:
                 raise InvalidTransition(run_id, None, RunState.AWAITING_APPROVAL)
             updated = self._transition(run, RunState.AWAITING_APPROVAL, self._clock())
-            # Approvals free the worker (§3.2): no lease while suspended.
+            # Approvals free the worker: no lease while suspended.
             self._runs[run_id] = replace(updated, lease_expires_at=None)
 
     async def resume(self, run_id: str, resume: Mapping[str, Any] | None = None) -> None:
@@ -546,7 +546,7 @@ class InMemoryRunQueue(RunQueue):
             if run.status is not RunState.RUNNING:
                 raise InvalidTransition(run_id, run.status, RunState.QUEUED)
             # The SIGTERM drain path: the run re-enters the queue with the
-            # claim's attempt increment given back (PRD §3.2, see the ABC).
+            # claim's attempt increment given back (see the ABC).
             now = self._clock()
             self._runs[run_id] = replace(
                 run,
@@ -571,7 +571,7 @@ class InMemoryRunQueue(RunQueue):
                 if run.lease_expires_at is None or run.lease_expires_at >= now:
                     continue
                 handled += 1
-                # The recovery sweep *requeues* (§3.2's own wording): a lost
+                # The recovery sweep *requeues* (own wording): a lost
                 # lease re-enters the queue and re-executes from its
                 # checkpoint, so this is not an ``_ALLOWED_TRANSITIONS`` step.
                 # ``attempt`` is unchanged — it increments on claim.
@@ -612,12 +612,12 @@ _RUN_COLUMNS: Final[str] = (
     "user_id, roles, config, resume, callback, headless"
 )
 
-#: Idempotent DDL — WP3's ``migrate`` reuses this constant. The partial index
-#: is the one-active-run-per-thread guard (D12/A11): it covers exactly the
+#: Idempotent DDL — ``migrate`` reuses this constant. The partial index
+#: is the one-active-run-per-thread guard: it covers exactly the
 #: active statuses, so the conflict check and the claim's thread-busy check
 #: are index scans. The ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` lines
-#: upgrade an older ``runs`` table in place (the M4 identity, config and
-#: resume columns, the M9 callback and headless columns); on a fresh table they
+#: upgrade an older ``runs`` table in place (the identity, config and
+#: resume columns, the callback and headless columns); on a fresh table they
 #: are no-ops.
 RUNS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -654,7 +654,7 @@ CREATE INDEX IF NOT EXISTS runs_thread_created_idx
     ON runs (thread_id, created_at)
 """
 
-#: Serializes every enqueue for one thread (D12/A11): a transaction-scoped
+#: Serializes every enqueue for one thread: a transaction-scoped
 #: advisory lock keyed on the thread id, held until the enqueue transaction
 #: commits. Row locks cannot do this job — with no active row there is nothing
 #: to lock, so two racing enqueues would both pass the check — and ``SKIP
@@ -662,7 +662,7 @@ CREATE INDEX IF NOT EXISTS runs_thread_created_idx
 #: guard leak.
 _ENQUEUE_LOCK_SQL: Final[str] = "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))"
 
-#: The one-active-run check (D12/A11), run under :data:`_ENQUEUE_LOCK_SQL`.
+#: The one-active-run check, run under :data:`_ENQUEUE_LOCK_SQL`.
 _ENQUEUE_CHECK_SQL: Final[str] = """
 SELECT id, status
 FROM runs
@@ -683,7 +683,7 @@ RETURNING {_RUN_COLUMNS}
 #: agent whose thread has no ``running``/``awaiting_approval`` run, lock it
 #: (``SKIP LOCKED`` so concurrent workers never block each other), and flip it
 #: to ``running`` with a fresh lease and ``attempt + 1``. A single statement is
-#: its own transaction. Residual race (accepted for M3): two queued runs of
+#: its own transaction. Residual race (accepted): two queued runs of
 #: one thread — only possible via ``wait_for_idle`` — could be claimed by two
 #: workers in the same instant, because the second worker's snapshot predates
 #: the first one's commit; the enqueue-time guard remains the primary defense.
@@ -760,7 +760,7 @@ WHERE runs.id = prior.id
 RETURNING prior.status
 """
 
-#: The SIGTERM drain path (PRD §3.2: requeued without consuming an attempt):
+#: The SIGTERM drain path (requeued without consuming an attempt):
 #: the claim's attempt increment is given back in the same UPDATE that clears
 #: the lease and claim. ``status = 'running'`` makes an illegal source state
 #: match zero rows (surfaced as ``InvalidTransition``), like every mutation
@@ -794,7 +794,7 @@ SET status = 'queued',
 WHERE id = %s AND status = 'awaiting_approval'
 """
 
-#: Recovery: one statement per branch (§3.2). ``attempt`` is untouched — it
+#: Recovery: one statement per branch. ``attempt`` is untouched — it
 #: increments on claim — and a NULL lease never matches (NULL < now() is
 #: NULL), so ``awaiting_approval`` runs are out of scope by construction.
 _EXPIRE_SQL: Final[str] = """
@@ -841,9 +841,9 @@ def _json_param(value: Any) -> str | None:
 
 
 class PostgresRunQueue(RunQueue):
-    """The production queue over the ``runs`` table (A7: Postgres-only transport).
+    """The production queue over the ``runs`` table (Postgres-only transport).
 
-    Mirrors ``PostgresEventLog``: the DSN comes from the environment (A23),
+    Mirrors ``PostgresEventLog``: the DSN comes from the environment,
     psycopg imports lazily (the ``[postgres]`` extra), and each operation
     works on a short-lived autocommit connection, opening an explicit
     ``transaction()`` block where several statements must land atomically.
@@ -856,7 +856,7 @@ class PostgresRunQueue(RunQueue):
     """
 
     def __init__(self, dsn: str) -> None:
-        """Queue over ``dsn`` — resolved from the environment by the caller (A23)."""
+        """Queue over ``dsn`` — resolved from the environment by the caller."""
         self._dsn = dsn
 
     @asynccontextmanager
@@ -901,7 +901,7 @@ class PostgresRunQueue(RunQueue):
     async def setup(self) -> None:
         """Create the ``runs`` table + indexes if missing (idempotent).
 
-        ``migrate`` (WP3) reuses :data:`RUNS_DDL`; this boot-time guard lets
+        ``migrate`` reuses :data:`RUNS_DDL`; this boot-time guard lets
         a fresh database work without it. The DDL is parameterless, so
         psycopg's simple query protocol runs every statement in one call.
         """
@@ -932,11 +932,11 @@ class PostgresRunQueue(RunQueue):
         if thread_id is None:
             raise ValueError(
                 "thread_id is required: the runs table stores every run against "
-                "its thread (PRD §3.1) — resolve the thread before enqueueing"
+                "its thread — resolve the thread before enqueueing"
             )
         async with self._conn() as conn:
             # One transaction: the per-thread lock, the active-run check and
-            # the INSERT land together (D12/A11).
+            # the INSERT land together.
             async with conn.transaction():
                 await conn.execute(_ENQUEUE_LOCK_SQL, (thread_id,))
                 cur = await conn.execute(_ENQUEUE_CHECK_SQL, (thread_id,))

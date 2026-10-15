@@ -17,8 +17,8 @@ Small agents for trying vdreamer for the first time, plus examples from the Lang
 From the repo root (the package is a uv workspace member, so it is importable after `uv sync`). The token is any string of 16+ characters:
 
 ```
-export VDREAMER_INTERNAL_TOKEN=dev-token-0123456789
 cd examples/playground
+echo VDREAMER_INTERNAL_TOKEN=dev-token-0123456789 > .env   # read by every vdreamer command
 uv run vdreamer dev --registry vdreamer.yaml --agent hello
 uv run vdreamer run hello --message "hi"              # second terminal
 ```
@@ -52,6 +52,6 @@ uv run vdreamer dev --registry vdreamer.yaml --agent broken --input '{"message":
 - `build()` returns the `StateGraph` uncompiled; vdreamer compiles it with its own checkpointer. `create_agent` gets `**ctx.agent_kwargs()` instead of `checkpointer=InMemorySaver()`.
 - A Functional API `@entrypoint` receives the run input (`{"messages": [...]}`) rather than a bare list, and takes `checkpointer=ctx.checkpointer`.
 - Tools go through `ctx.tools.govern([...])` (or the `create_agent` middleware from `agent_kwargs()`), so clients see `tool.call`/`tool.result`.
-- Node code reads `msg.text` where the docs read `msg.content`: vdreamer builds chat models with `output_version="v1"` (PRD §2.4), so `content` is a list of content blocks, and the prompt-chaining gate (`"?" in joke`) would never pass on it.
+- Node code reads `msg.text` where the docs read `msg.content`: vdreamer builds chat models with `output_version="v1"`, so `content` is a list of content blocks, and the prompt-chaining gate (`"?" in joke`) would never pass on it.
 - The router asks for `with_structured_output(Route, method="function_calling")`. The default `json_schema` method relies on Ollama's `format` field, which `-cloud` models ignore (they answer in prose and parsing fails); tool calling works on every tool-capable model.
 - Final state keys (`output`, `final_joke`) are not protocol events: clients see the LLM calls as messages, plus any artifacts, logs and progress the agent emits.

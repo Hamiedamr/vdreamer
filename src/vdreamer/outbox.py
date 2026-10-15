@@ -1,9 +1,9 @@
-"""The outbox (PRD §4.3, A26): notifications and run callbacks, at least once.
+"""The outbox: notifications and run callbacks, at least once.
 
 Three things leave the platform, and all three go through one table:
 
 - **run callbacks** — a ``/trigger`` run's ``callback`` URL hears ``completed``,
-  ``failed`` or ``interrupt`` (A26). Every terminal status but ``completed``
+  ``failed`` or ``interrupt``. Every terminal status but ``completed``
   (``rejected``, ``expired``, ``cancelled``) is ``failed`` here; the body's
   ``status`` says which;
 - **webhook notifications** — a headless or role-gated interrupt POSTs to
@@ -93,7 +93,7 @@ class OutboxConfigError(RuntimeError):
 
 @dataclass(frozen=True)
 class SmtpSettings:
-    """An SMTP relay and who it mails (A23: the password is env-only)."""
+    """An SMTP relay and who it mails (the password is env-only)."""
 
     host: str
     sender: str
@@ -183,7 +183,7 @@ def _smtp_from_env(env: Mapping[str, str]) -> SmtpSettings | None:
     password = get(SMTP_PASSWORD_ENV)
     if password is not None and username is None:
         raise OutboxConfigError(f"{SMTP_PASSWORD_ENV} is set without {SMTP_USER_ENV}")
-    allowlist = NetworkAllowlist.from_env(env)  # the relay is a declared endpoint too (§5.2)
+    allowlist = NetworkAllowlist.from_env(env)  # the relay is a declared endpoint too
     if allowlist is not None:
         try:
             allowlist.check_config(host)
@@ -251,7 +251,7 @@ def event_id_for(run_id: str, kind: str, discriminator: str) -> str:
 
 
 def review_url(web_base_url: str, interrupt_id: str) -> str:
-    """The deep link into the Web UI's review page (§4.3)."""
+    """The deep link into the Web UI's review page."""
     return f"{web_base_url.rstrip('/')}/review/{urllib.parse.quote(interrupt_id, safe='')}"
 
 
@@ -790,7 +790,7 @@ DELIVERY_TIMEOUT_S: Final = 10.0
 class HttpDeliverer:
     """POSTs an entry's JSON body, signed when a secret is set.
 
-    ``require_allowlist`` is the callback rule (A26): with no allowlist
+    ``require_allowlist`` is the callback rule: with no allowlist
     nothing is sent. The operator's webhook passes ``False`` and is checked only
     when an allowlist exists. Redirects are not followed and proxy environment
     variables are ignored: the target is the allowlisted one.

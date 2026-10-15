@@ -1,21 +1,21 @@
-"""The run context and the implicit runtime helpers (PRD §2.2, §3.3, §3.4, §4.1, §4.5).
+"""The run context and the implicit runtime helpers.
 
-Milestone 1 scope:
+scope:
 
 - ``VDreamerContext`` — the run identity. It rides the LangGraph ``context=``
   channel (``create_agent`` graphs declare ``context_schema=VDreamerContext``)
   *and* a module-level ``ContextVar``, so the implicit helpers below resolve
-  the current run in any node or tool without parameters (PRD §2.2 line 70).
+  the current run in any node or tool without parameters.
 - ``emit_progress`` / ``emit_log`` / ``emit_citation`` — buffer one protocol
-  record (PRD §3.3 payload shapes) into ``VDreamerContext.pending`` and
+  record (payload shapes) into ``VDreamerContext.pending`` and
   mirror it into the run's stream. ``emit_artifact`` lives in
-  ``vdreamer.artifacts`` (it stores bytes first, D7) and is re-exported here.
-- ``require_approval`` — the HITL gate (PRD §4.1): one normalized interrupt
-  value shared by every approval source (A44).
+  ``vdreamer.artifacts`` (it stores bytes first) and is re-exported here.
+- ``require_approval`` — the HITL gate: one normalized interrupt
+  value shared by every approval source.
 
-Since Milestone 6 the context also carries ``ctx.files`` (inbound files,
-``safe_extract``) and ``ctx.sandbox`` (D19); ``FileRef`` validates its
-``inputs/`` prefix (A17).
+Since the context also carries ``ctx.files`` (inbound files,
+``safe_extract``) and ``ctx.sandbox``; ``FileRef`` validates its
+``inputs/`` prefix.
 """
 
 from __future__ import annotations
@@ -60,24 +60,24 @@ __all__ = [
     "require_approval",
 ]
 
-#: PRD §3.3: citation snippets are capped at 300 characters.
+#: Citation snippets are capped at 300 characters.
 MAX_SNIPPET_CHARS = 300
 
-#: PRD §4.1: the default action set for ``require_approval``.
+#: The default action set for ``require_approval``.
 DEFAULT_APPROVAL_ACTIONS: tuple[str, ...] = ("approve", "reject", "edit", "feedback")
 
-#: PRD §4.3: every action a resolver may take.
+#: Every action a resolver may take.
 APPROVAL_ACTIONS: frozenset[str] = frozenset({"approve", "reject", "edit", "feedback", "respond"})
 
 
 class FileRef(pydantic.BaseModel):
-    """An inbound file: a MinIO key under ``inputs/`` (PRD §2.2, §3.5, A17).
+    """An inbound file: a MinIO key under ``inputs/``.
 
     Upstream systems upload to ``inputs/`` and pass the key in a run's input;
     validation refuses any other prefix and any key that could climb out of
     it (``..``, a leading ``/``, backslashes) — so the gateway, which
     validates every input against the agent's ``input_schema``, rejects a
-    ref that points at another thread's artifacts with ``422`` (A17). Agents
+    ref that points at another thread's artifacts with ``422``. Agents
     read the file with ``ctx.files.open(ref)``.
     """
 
@@ -91,23 +91,23 @@ class FileRef(pydantic.BaseModel):
         try:
             check_key(value)
         except ObjectKeyError:
-            raise ValueError("object_key must be a clean relative key (A17)") from None
+            raise ValueError("object_key must be a clean relative key") from None
         if not value.startswith(INPUTS_PREFIX) or value == INPUTS_PREFIX:
-            raise ValueError(f"object_key must be under {INPUTS_PREFIX!r} (A17)")
+            raise ValueError(f"object_key must be under {INPUTS_PREFIX!r}")
         return value
 
 
 class VDreamerContext(pydantic.BaseModel):
-    """The run identity (PRD §2.2).
+    """The run identity.
 
     Carried via LangGraph's ``context=`` — ``create_agent``-built graphs
     declare ``context_schema=VDreamerContext`` and receive it as
     ``runtime.context`` in nodes — *and* held in a module-level ``ContextVar``
     so the implicit helpers (``emit_*``) resolve the current run from any node
-    or tool without parameters (PRD §2.2 line 70).
+    or tool without parameters.
 
     ``pending`` buffers the protocol records the helpers append; the worker
-    event pipeline that drains it lands in Milestone 2.
+    event pipeline that drains it lands.
     """
 
     run_id: str
@@ -118,20 +118,20 @@ class VDreamerContext(pydantic.BaseModel):
     idempotency_key: str | None = None
     attempt: int = 0
     headless: bool = False
-    """A headless run (D15): no user in the loop, so every approval must name
-    an ``approver_role`` (A16) and a ``reject`` ends the run ``rejected``."""
+    """A headless run: no user in the loop, so every approval must name
+    an ``approver_role`` and a ``reject`` ends the run ``rejected``."""
     pending: list[dict[str, Any]] = pydantic.Field(default_factory=list)
 
     @property
     def files(self) -> Files:
-        """Inbound files and ``safe_extract`` (§3.5): ``ctx.files.open(ref)``."""
+        """Inbound files and ``safe_extract``: ``ctx.files.open(ref)``."""
         from vdreamer.files import Files
 
         return Files(self)
 
     @property
     def sandbox(self) -> Sandbox:
-        """The code sandbox (§3.5, D19): ``ctx.sandbox.run(code, inputs)``."""
+        """The code sandbox: ``ctx.sandbox.run(code, inputs)``."""
         from vdreamer.sandbox import Sandbox
 
         return Sandbox(self)
@@ -180,9 +180,9 @@ def current_context_or_none() -> VDreamerContext | None:
 
 
 def _mirror_to_stream(record: dict[str, Any]) -> None:
-    """Best-effort mirror of a buffered record into the LangGraph stream (WP2).
+    """Best-effort mirror of a buffered record into the LangGraph stream.
 
-    Under the vdreamer stream drivers (``vdreamer.streaming``, A31), custom-mode
+    Under the vdreamer stream drivers (``vdreamer.streaming``), custom-mode
     stream data — not ``pending`` — is the live transport: every driver maps
     vdreamer-enveloped ``custom`` parts back onto the protocol events. So the
     helpers append to ``pending`` (the fallback, kept for non-streamed runs
@@ -218,7 +218,7 @@ def emit_record(record: dict[str, Any]) -> None:
 
 
 def emit_progress(label: str, pct: float | None = None) -> None:
-    """Emit a ``progress`` record (PRD §3.3): ``{label, pct?}``.
+    """Emit a ``progress`` record: ``{label, pct?}``.
 
     ``pct`` is a percentage, ``0``–``100`` (``emit_progress("parsing", 40)``),
     not a ``0``–``1`` fraction; clients render it as-is. Out of range is a
@@ -231,7 +231,7 @@ def emit_progress(label: str, pct: float | None = None) -> None:
 
 
 def emit_log(message: str, level: str = "info") -> None:
-    """Emit a ``log`` record (PRD §3.3): ``{level, message}``."""
+    """Emit a ``log`` record: ``{level, message}``."""
     record = {"type": "log", "level": level, "message": message}
     emit_record(record)
 
@@ -243,7 +243,7 @@ def emit_citation(
     snippet: str = "",
     score: float | None = None,
 ) -> str:
-    """Emit a ``citation`` record (PRD §3.3) and return the ``citation_id``.
+    """Emit a ``citation`` record and return the ``citation_id``.
 
     ``source`` and ``locator`` are copied to plain dicts (the record must
     survive the run); ``snippet`` is truncated to ``MAX_SNIPPET_CHARS`` (300).
@@ -272,25 +272,25 @@ def require_approval(
     edit_schema: type[pydantic.BaseModel] | None = None,
     ttl_hours: int = 24,
 ) -> Any:
-    """Pause the run for a human decision (PRD §4.1, §4.5, A44).
+    """Pause the run for a human decision.
 
     Wraps ``langgraph.types.interrupt`` with the one normalized approval value
-    every interrupt source shares (A44):
+    every interrupt source shares:
 
     ``{kind, payload, actions, approver_role, scope, edit_schema, ttl_hours}``
 
     where ``edit_schema`` is serialized to its JSON Schema. The gateway
-    enforces the serialized policy (A15): who may resolve (the initiator, or
-    ``approver_role``; four-eyes for ``HITL_STRICT_SCOPES``, A32), the
+    enforces the serialized policy: who may resolve (the initiator, or
+    ``approver_role``; four-eyes for ``HITL_STRICT_SCOPES``), the
     offered ``actions``, the expiry, and ``edit`` payloads against the schema
     (``422`` otherwise). In a headless run a ``reject`` ends the run
-    ``rejected`` without resuming it (§4.3).
+    ``rejected`` without resuming it.
 
     Must be called from inside a LangGraph node — ``interrupt()`` needs the
     run config, and outside a runnable context it raises ``RuntimeError``. The
     first call surfaces as the run's pending interrupt
     (``aget_state(config).interrupts``); a resume restarts this node from the
-    top, so pre-work belongs in a preceding node (PRD §4.1), and the resume
+    top, so pre-work belongs in a preceding node, and the resume
     value arrives as this function's return.
 
     Args:
@@ -299,7 +299,7 @@ def require_approval(
         actions: offered decisions, default ``("approve", "reject", "edit",
             "feedback")``; any of ``approve|reject|edit|feedback|respond``.
         approver_role: required role for resolution; required in headless runs
-            (A16) — a headless call without one raises ``ValueError``.
+            — a headless call without one raises ``ValueError``.
         scope: capability scope, e.g. ``"db:write:prod"``.
         edit_schema: pydantic model validating ``edit`` payloads.
         ttl_hours: how long the interrupt stays resolvable before expiry.
@@ -328,7 +328,7 @@ def require_approval(
     ctx = current_context_or_none()
     if ctx is not None and ctx.headless and not approver_role:
         raise ValueError(
-            f"require_approval({kind!r}) in a headless run needs an approver_role (A16)"
+            f"require_approval({kind!r}) in a headless run needs an approver_role"
         )
     decision = interrupt(
         {

@@ -1,14 +1,14 @@
-"""The in-process run driver (PRD §2.2, §2.4, A42).
+"""The in-process run driver.
 
 ``AgentRunner`` is the Milestone-1 half of the runtime contract: it builds the
 agent's graph once and caches it — "build() runs once per worker; graph cached"
-(PRD §2.2) — then drives each run with the resolved ``durability`` (A42), the
+ — then drives each run with the resolved ``durability``, the
 lifecycle hooks (``on_run_start`` / ``on_run_end``), and the ``VDreamerContext``
 bound so the implicit helpers (vdreamer.context) resolve the run from any node
-or tool (PRD §2.2 line 70).
+or tool.
 
 The worker/queue topology — claiming runs, lease heartbeats, crash recovery,
-resume-from-checkpoint — lands in Milestone 3 and drives this same runner.
+resume-from-checkpoint — lands and drives this same runner.
 """
 
 from __future__ import annotations
@@ -30,19 +30,19 @@ from vdreamer.validate import ensure_compiled
 if TYPE_CHECKING:
     from vdreamer.mcp import MCPRegistry
 
-#: The ``configurable`` key carrying the run id into every checkpoint (M4).
+#: The ``configurable`` key carrying the run id into every checkpoint.
 #: LangGraph copies ``configurable`` scalars into checkpoint metadata
 #: (verified on langgraph 1.2.15), so a worker can tell whether a thread's
 #: latest checkpoint was written by *this* run — and resume it from the
-#: checkpoint instead of re-driving the input (PRD §3.2 recovery).
+#: checkpoint instead of re-driving the input (recovery).
 RUN_ID_CONFIGURABLE_KEY: Final[str] = "vdreamer_run_id"
 
 #: The ``configurable`` key recording the MCP tool-snapshot hash a run was
-#: built against (§2.7: "each run recording its tool-snapshot hash"); it lands
+#: built against ("each run recording its tool-snapshot hash"); it lands
 #: in the run's checkpoint metadata the same way the run id does.
 TOOL_SNAPSHOT_CONFIGURABLE_KEY: Final[str] = "vdreamer_tool_snapshot"
 
-#: ``configurable`` keys a client's run ``config`` may not set (§2.5): the
+#: ``configurable`` keys a client's run ``config`` may not set: the
 #: thread and checkpoint addressing are the server's, as is the run id above.
 #: Keys starting with ``__`` are LangGraph-internal and reserved as well.
 RESERVED_CONFIGURABLE_KEYS: Final[frozenset[str]] = frozenset(
@@ -64,7 +64,7 @@ def is_reserved_configurable_key(key: str) -> bool:
 
 @dataclass(frozen=True)
 class RunInfo:
-    """What the lifecycle hooks receive (PRD §2.2).
+    """What the lifecycle hooks receive.
 
     ``status`` is the hook phase: ``on_run_start`` gets ``"running"``;
     ``on_run_end`` gets a copy with ``"completed"`` or ``"failed"``.
@@ -78,7 +78,7 @@ class RunInfo:
 
 
 class AgentRunner:
-    """Builds an agent's graph once, then drives runs of it in-process (PRD §2.2)."""
+    """Builds an agent's graph once, then drives runs of it in-process."""
 
     def __init__(
         self,
@@ -108,11 +108,11 @@ class AgentRunner:
         )
 
     def tool_snapshot(self) -> str | None:
-        """The MCP tool-snapshot hash, or ``None`` without MCP servers (§2.7)."""
+        """The MCP tool-snapshot hash, or ``None`` without MCP servers."""
         return self._mcp.snapshot_hash() if self._mcp is not None else None
 
     def build(self) -> Any:
-        """Build and compile the graph on the first call; cached afterwards (§2.2).
+        """Build and compile the graph on the first call; cached afterwards.
 
         ``StateGraph`` returns compile here with the runner's checkpointer;
         already-runnable graphs (compiled ``StateGraph``, functional-API
@@ -121,7 +121,7 @@ class AgentRunner:
 
         With MCP servers, the cache is keyed by the tool snapshot: a refresh
         that changed the discovered tools rebuilds the graph for the next run
-        ("changes apply to new runs", §2.7); runs in flight keep their graph.
+        ("changes apply to new runs"); runs in flight keep their graph.
         """
         snapshot = self.tool_snapshot()
         if self._compiled is None or snapshot != self._built_snapshot:
@@ -149,11 +149,11 @@ class AgentRunner:
         return await self.build().aget_state(config)
 
     def _resolve_durability(self, durability: Literal["sync", "async"] | None) -> str:
-        """Resolve the durability for a run (A42).
+        """Resolve the durability for a run.
 
         An explicit argument wins, else the agent's ``durability`` attribute
         (agents set ``durability = "async"`` to opt a whole agent in), else
-        ``"sync"`` — the default, because crash recovery (§3.2) needs every
+        ``"sync"`` — the default, because crash recovery needs every
         step checkpointed. Anything else is a ``ValueError``.
         """
         resolved: str = (
@@ -161,7 +161,7 @@ class AgentRunner:
         )
         if resolved not in ("sync", "async"):
             raise ValueError(
-                "durability must be 'sync' or 'async' (A42: agents may set "
+                "durability must be 'sync' or 'async' (agents may set "
                 f"durability = 'async' to opt in), got {resolved!r}"
             )
         return resolved
@@ -174,10 +174,10 @@ class AgentRunner:
     ) -> RunInfo:
         """The ``RunInfo`` for one run — the identity the hooks receive.
 
-        ``context`` wins when given (the worker, Milestone 3, claims a queued
+        ``context`` wins when given (the worker claims a queued
         run with its ``run_id``/``thread_id``/``attempt``); otherwise fall back
         to ``config["configurable"]``; otherwise generate ids — one execution
-        is one ``run_id`` (PRD §3.1).
+        is one ``run_id``.
         """
         configurable: dict[str, Any] = {}
         if config is not None:
@@ -212,7 +212,7 @@ class AgentRunner:
         try:
             # context=/durability= verified against langgraph 1.2.15: a graph
             # without a context_schema ignores a non-None context, and
-            # durability is a per-invocation ainvoke kwarg. A42's "sync" only
+            # durability is a per-invocation ainvoke kwarg. The "sync" default only
             # means anything with a checkpointer present — and 1.2.15 raises
             # on durability="sync" without one — so the kwarg is not
             # forwarded for a checkpointer-less runner.
@@ -238,10 +238,10 @@ class AgentRunner:
         durability: str,
         sink: EventSink,
     ) -> Any:
-        """Start hook → stream driver → sink → end hook (``arun(sink=...)``, WP2).
+        """Start hook → stream driver → sink → end hook (``arun(sink=...)``).
 
         Same hook and return-value contract as :meth:`_execute`: the driver
-        (``vdreamer.streaming``, selected by ``VDREAMER_STREAM_DRIVER``, A31)
+        (``vdreamer.streaming``, selected by ``VDREAMER_STREAM_DRIVER``)
         yields protocol envelopes for the whole run — including the terminal
         ``run.status`` — and ``driver.result`` carries the final graph value
         the non-streaming path would return. When the graph raises, the
@@ -286,7 +286,7 @@ class AgentRunner:
     ) -> Any:
         """Run one invocation of the agent's graph end to end.
 
-        Order of operations (PRD §2.2, A42):
+        Order of operations:
 
         1. ``build()`` — cached, so the agent's ``build(ctx)`` runs at most
            once per runner.
@@ -300,8 +300,8 @@ class AgentRunner:
            resolve the run from any node or tool; without one, nothing binds
            and the helpers raise if a node reaches for them.
 
-        With ``sink`` (Milestone 2, additive), step 3 instead streams the run
-        through the selected driver (``VDREAMER_STREAM_DRIVER``, A31) and
+        With ``sink`` (additive), step 3 instead streams the run
+        through the selected driver (``VDREAMER_STREAM_DRIVER``) and
         writes every protocol envelope to the sink in arrival order; hooks,
         exception semantics, and the return value (the final state) are
         identical to the non-streaming path. The driver is chosen per run —
@@ -311,8 +311,8 @@ class AgentRunner:
         ``context`` is forwarded to ``ainvoke`` whenever given — verified safe
         on langgraph 1.2.15: a graph that declares no ``context_schema`` runs
         unchanged, and one that does (``StateGraph(..., context_schema=...)``,
-        or ``create_agent`` wired through ``ctx.agent_kwargs()``, Milestone 1
-        follow-up) receives it as ``runtime.context`` in nodes. The resolved
+        or ``create_agent`` wired through ``ctx.agent_kwargs()``)
+        receives it as ``runtime.context`` in nodes. The resolved
         durability is forwarded only when the runner has a checkpointer: there
         is nothing to persist otherwise, and langgraph 1.2.15 raises on
         ``durability="sync"`` without a checkpointer (it also warns that the
@@ -321,19 +321,19 @@ class AgentRunner:
         An interrupted run (``require_approval`` → LangGraph ``GraphInterrupt``)
         returns normally with the pending interrupt readable from
         ``aget_state(config).interrupts``; mapping that onto
-        ``awaiting_approval`` (PRD §3.2) and resuming is the worker's job,
-        Milestone 3. The streaming path emits one ``interrupt.requested``
+        ``awaiting_approval`` and resuming is the worker's job.
+        The streaming path emits one ``interrupt.requested``
         envelope per pending interrupt and ends on ``run.status``
-        ``"awaiting_approval"`` (§3.2).
+        ``"awaiting_approval"``.
 
         Args:
             input: the graph input — or a ``Command(resume=...)`` continuation.
             config: the run config; ``config["configurable"]["thread_id"]`` is
                 what keys the checkpointer.
             context: the run identity, bound for the implicit helpers.
-            durability: per-run override of the agent's durability (A42).
+            durability: per-run override of the agent's durability.
             sink: when given, every protocol event of the run is written here
-                (Milestone 2, WP2), in arrival order with per-run ``seq``.
+               , in arrival order with per-run ``seq``.
 
         Returns:
             The graph result (``stream_mode="values"``), unchanged.

@@ -1,8 +1,8 @@
-"""``create_app`` — the FastAPI gateway over one :class:`GatewayBackend` (D20).
+"""``create_app`` — the FastAPI gateway over one :class:`GatewayBackend`.
 
-FastAPI is the implementation, not the contract (D20): the contract is the
-REST/SSE protocol (§2.5, §3.3) and its OpenAPI 3.1 document. FastAPI's own
-docs routes are disabled (they load Swagger UI from a CDN — §5.2 forbids it);
+FastAPI is the implementation, not the contract: the contract is the
+REST/SSE protocol and its OpenAPI 3.1 document. FastAPI's own
+docs routes are disabled (they load Swagger UI from a CDN — forbids it);
 ``/api/v1/docs`` serves the vendored copy instead, and ``/static`` serves the
 vendored assets from the wheel.
 """
@@ -56,7 +56,7 @@ def create_app(
     *,
     lifespan: Lifespan | None = None,
 ) -> FastAPI:
-    """Build the gateway app (§2.5) over ``backend``."""
+    """Build the gateway app over ``backend``."""
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -71,9 +71,9 @@ def create_app(
         version=__version__,
         summary=f"LangGraph agents served over REST/SSE — protocol {PROTOCOL_VERSION}.",
         description=(
-            "The vdreamer REST/SSE contract (PRD §2.5). Authenticate with the internal "
-            "bearer token plus X-User-Id / X-User-Roles (D13); upstream services use a "
-            "service token on /agents/{name}/trigger (A16). Every error response is "
+            "The vdreamer REST/SSE contract. Authenticate with the internal "
+            "bearer token plus X-User-Id / X-User-Roles; upstream services use a "
+            "service token on /agents/{name}/trigger. Every error response is "
             "{error: {code, message, details?}}. Events stream as SSE; their JSON "
             f"Schema is at {API_PREFIX}/protocol/schema.json."
         ),

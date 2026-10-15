@@ -1,18 +1,12 @@
 """vdreamer — serve LangGraph agents as a production REST/SSE API.
 
-The contract lives in ``docs/PRD.md`` (protocol version ``1.0``); the plan in
-``docs/tasks.md``. Milestone 0 shipped the package skeleton and the CI entry
-points (``--version``, ``validate``, ``doctor --offline``); Milestone 1
-(Developer Contract Core) completes the agent-author surface: the full
-``BaseAgent`` / ``BuildContext`` contract, the run context and implicit
-helpers, tool policies with ``@vdreamer.tool``, discovery (specs,
-``vdreamer.yaml`` registry, agents dir), the Postgres checkpointer factory,
-and the ``AgentRunner`` run driver. Milestone 2 adds the protocol core
-(WP1): protocol v1.0 event types, the ``EventEnvelope`` and its payload
-models, and the event sinks (in-memory + the Postgres ``run_events`` log).
-
-Agents import everything they need from here (``from vdreamer import
-BaseAgent, BuildContext, Mode, FileRef``, ``@vdreamer.tool``, …); the
+Agents import everything they need from here: the agent contract
+(``BaseAgent``, ``BuildContext``, ``Mode``), tools and their policies
+(``@vdreamer.tool``, ``Policy``, ``ApprovalSpec``), the run helpers
+(``emit_progress``, ``emit_log``, ``emit_artifact``/``aemit_artifact``,
+``emit_citation``, ``require_approval``, ``current_context``), approvals
+(``ApprovalGate``), inbound files (``FileRef``), and the protocol models
+(``EventEnvelope`` and the payload types, protocol version ``1.0``). The
 submodules stay importable for finer-grained access.
 """
 

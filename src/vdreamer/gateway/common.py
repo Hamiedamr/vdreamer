@@ -54,9 +54,9 @@ def agent_or_404(backend: GatewayBackend, name: str) -> BaseAgent:
 
 
 def can_use(agent: BaseAgent, identity: Identity) -> bool:
-    """Agent RBAC (§2.2): ``access_roles`` empty = any user, else any one of them.
+    """Agent RBAC: ``access_roles`` empty = any user, else any one of them.
 
-    An upstream service (A16) is vouched for by its token, not by roles.
+    An upstream service is vouched for by its token, not by roles.
     """
     roles = tuple(agent.access_roles)
     return not roles or identity.service or identity.has_any_role(roles)
@@ -90,7 +90,7 @@ async def owned_thread_or_404(
     backend: GatewayBackend, thread_id: str, identity: Identity
 ) -> ThreadRecord:
     """The caller's live thread. Someone else's thread is a 404, never a 403:
-    owner scoping (§2.5) must not leak which ids exist."""
+    owner scoping must not leak which ids exist."""
     thread = await backend.threads.get(thread_id)
     if thread is None or thread.owner_id != identity.user_id:
         raise ApiError(404, ErrorCode.THREAD_NOT_FOUND, f"no thread {thread_id!r}")

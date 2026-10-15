@@ -1,6 +1,6 @@
-"""JSON Schema → TypeScript declarations, for ``vdreamer export-schema`` (PRD §6.1).
+"""JSON Schema → TypeScript declarations, for ``vdreamer export-schema``.
 
-vdreamer ships no npm packages and no client SDK (§7.2, A45): client teams get
+vdreamer ships no npm packages and no client SDK: client teams get
 ``.d.ts`` *types* generated from the same schemas the gateway serves, so a
 TypeScript client compiles against the protocol without a code generator of
 its own. This is a deliberately small translator — the subset pydantic and

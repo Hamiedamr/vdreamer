@@ -1,4 +1,4 @@
-"""``vdreamer migrate`` — apply the vdreamer schema (PRD §2.3; M3 WP3, M4, M6, M9).
+"""``vdreamer migrate`` — apply the vdreamer schema.
 
 Creates the vdreamer tables — ``runs`` (:data:`vdreamer.queue.RUNS_DDL`, which
 also upgrades an older table in place), ``run_events``
@@ -11,10 +11,10 @@ tables (``AsyncPostgresSaver.setup()`` runs its
 migrations). Every step is ``CREATE ... IF NOT EXISTS`` idempotent: running
 ``migrate`` again on a migrated database is a no-op.
 
-The DSN comes from the environment only (A23): ``VDREAMER_PG_DSN``, resolved
+The DSN comes from the environment only: ``VDREAMER_PG_DSN``, resolved
 by :func:`vdreamer.persistence.dsn_from_env` — never a command-line argument,
 never YAML. With ``VDREAMER_MINIO_*`` set it also creates the MinIO bucket
-and its 30-day lifecycle rule on ``artifacts/`` and ``extracted/`` (A9).
+and its 30-day lifecycle rule on ``artifacts/`` and ``extracted/``.
 Later milestones extend this command as their tables land; the DDL constants
 live beside their writers.
 """
@@ -74,7 +74,7 @@ async def _apply(dsn: str) -> None:
         print(f"[--] MinIO bucket skipped ({MINIO_ENDPOINT_ENV} unset)")
     else:
         await asyncio.to_thread(objects.setup)
-        print(f"[ok] MinIO bucket {objects.bucket!r} + {RETENTION_DAYS}-day lifecycle (A9)")
+        print(f"[ok] MinIO bucket {objects.bucket!r} + {RETENTION_DAYS}-day lifecycle")
 
     # The checkpointer's migrations are langgraph's to run — reuse the same
     # factory the worker uses so ``migrate`` and ``worker`` never diverge.

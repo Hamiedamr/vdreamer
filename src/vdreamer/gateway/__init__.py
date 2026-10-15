@@ -1,6 +1,6 @@
-"""The REST/SSE gateway (PRD §2.5, D20) — ``vdreamer serve``.
+"""The REST/SSE gateway — ``vdreamer serve``.
 
-FastAPI lives behind this package and never in the agent-author API (D20):
+FastAPI lives behind this package and never in the agent-author API:
 ``import vdreamer`` does not import it. Build an app with :func:`create_app`
 over a :class:`GatewayBackend`; ``vdreamer.entrypoints`` wires the Postgres
 (``serve``) and in-memory (``dev``) backends.

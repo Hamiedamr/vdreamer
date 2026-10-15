@@ -1,10 +1,10 @@
-"""Internal auth (D13, A14) and the protocol-version handshake (§6.1).
+"""Internal auth and the protocol-version handshake.
 
 The gateway is never exposed to end users: the Web Backend calls it with
 ``Authorization: Bearer <internal_token>`` plus the end user's identity in
-``X-User-Id`` / ``X-User-Roles`` (D13). This module is a pure ASGI middleware
+``X-User-Id`` / ``X-User-Roles``. This module is a pure ASGI middleware
 so the checks run *before* FastAPI parses bodies or validates parameters —
-A14: "token checked first". In order, for every ``/api/v1`` request outside
+The token is checked first. In order, for every ``/api/v1`` request outside
 :data:`PUBLIC_PATHS`:
 
 1. **Token** — one of the (at most two, for rotation) configured internal
@@ -16,7 +16,7 @@ A14: "token checked first". In order, for every ``/api/v1`` request outside
    missing_identity``. ``X-User-Roles`` is a comma-separated list (may be
    empty).
 
-A service token (A16, ``VDREAMER_SERVICE_TOKENS``) replaces steps 1 and 3 on
+A service token (``VDREAMER_SERVICE_TOKENS``) replaces steps 1 and 3 on
 :func:`is_service_route` only: the caller is ``service:<name>`` and sends no
 identity headers.
 
@@ -27,7 +27,7 @@ read it through :func:`current_identity`. Every response also gets
 :data:`PUBLIC_PATHS` — probes, metrics, and the contract documents — skip the
 token and identity steps: orchestrator probes and the Prometheus scraper carry
 no user, and the docs page loads in a browser that cannot attach a bearer
-token. The gateway binds to the internal interface only (A14), which is what
+token. The gateway binds to the internal interface only, which is what
 protects them.
 """
 
@@ -67,9 +67,9 @@ _PROTOCOL_MAJOR: Final[str] = PROTOCOL_VERSION.split(".", 1)[0]
 
 @dataclass(frozen=True)
 class Identity:
-    """The end user a request acts for (D13) — as asserted by the Web Backend.
+    """The end user a request acts for — as asserted by the Web Backend.
 
-    An upstream service (A16) acts as ``service:<name>`` with ``service`` set.
+    An upstream service acts as ``service:<name>`` with ``service`` set.
     """
 
     user_id: str
@@ -113,7 +113,7 @@ def _presented_token(authorization: str | None) -> bytes | None:
 
 
 def is_service_route(method: str, path: str) -> bool:
-    """What a service token (A16) may call: trigger, and read the runs it started."""
+    """What a service token may call: trigger, and read the runs it started."""
     parts = path.removeprefix(API_PREFIX).strip("/").split("/")
     if method == "POST":
         return len(parts) == 3 and parts[0] == "agents" and parts[2] == "trigger"
@@ -125,9 +125,9 @@ def is_service_route(method: str, path: str) -> bool:
 
 
 class InternalAuthMiddleware:
-    """Token → protocol version → identity, ahead of routing (A14, §6.1).
+    """Token → protocol version → identity, ahead of routing.
 
-    A service token (A16) is accepted on :func:`is_service_route` only; its
+    A service token is accepted on :func:`is_service_route` only; its
     caller is ``service:<name>`` and carries no ``X-User-Id``.
     """
 
@@ -221,7 +221,7 @@ class InternalAuthMiddleware:
                 response = error_response(
                     400,
                     ErrorCode.MISSING_IDENTITY,
-                    f"the {USER_ID_HEADER} header is required (D13)",
+                    f"the {USER_ID_HEADER} header is required",
                 )
                 await response(scope, receive, send_with_headers)
                 return
@@ -233,7 +233,7 @@ class InternalAuthMiddleware:
 
 
 #: Declares the bearer scheme in OpenAPI; the middleware already enforced it.
-_bearer = HTTPBearer(auto_error=False, description="The internal token (D13, A14).")
+_bearer = HTTPBearer(auto_error=False, description="The internal token.")
 
 
 def current_identity(
@@ -243,12 +243,12 @@ def current_identity(
         str | None,
         Header(
             alias=USER_ID_HEADER,
-            description="The end user's id, asserted by the Web Backend (D13). Required.",
+            description="The end user's id, asserted by the Web Backend. Required.",
         ),
     ] = None,
     _user_roles: Annotated[
         str | None,
-        Header(alias=USER_ROLES_HEADER, description="The end user's roles, comma-separated (D13)."),
+        Header(alias=USER_ROLES_HEADER, description="The end user's roles, comma-separated."),
     ] = None,
 ) -> Identity:
     """The request's :class:`Identity` (set by :class:`InternalAuthMiddleware`).

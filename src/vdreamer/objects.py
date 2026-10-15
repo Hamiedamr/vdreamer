@@ -1,18 +1,18 @@
-"""Object storage for artifact bytes and inbound files (PRD §2.1, §3.4, §3.5, A9, A17).
+"""Object storage for artifact bytes and inbound files.
 
 One key space, three prefixes:
 
-- ``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}`` — artifact bytes (D7);
-- ``inputs/…`` — files upstream systems upload for runs (``FileRef``, A17);
+- ``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}`` — artifact bytes;
+- ``inputs/…`` — files upstream systems upload for runs (``FileRef``);
   write-only for them, read-only for vdreamer;
 - ``extracted/{thread_id}/{run_id}/…`` — what ``ctx.files.safe_extract``
-  unpacked (A34).
+  unpacked.
 
 Production is MinIO (:class:`MinioObjectStore`, the ``[minio]`` extra), with
 a bucket lifecycle rule that deletes ``artifacts/`` and ``extracted/`` after
-30 days (A9 — a missing object then reads back as ``None`` and the gateway
+30 days (a missing object then reads back as ``None`` and the gateway
 answers ``410``). ``vdreamer dev`` keeps objects on the local filesystem next
-to its ``.db`` file (:class:`FilesystemObjectStore`, D11) and sweeps expired
+to its ``.db`` file (:class:`FilesystemObjectStore`) and sweeps expired
 ones at boot; tests use :class:`InMemoryObjectStore`.
 
 The core methods are synchronous — both the MinIO client and the filesystem
@@ -39,14 +39,14 @@ ARTIFACTS_PREFIX: Final = "artifacts/"
 INPUTS_PREFIX: Final = "inputs/"
 EXTRACTED_PREFIX: Final = "extracted/"
 
-#: A9: artifacts (and extracted inputs) are deleted after 30 days.
+#: Artifacts (and extracted inputs) are deleted after 30 days.
 RETENTION_DAYS: Final = 30
 EXPIRING_PREFIXES: Final[tuple[str, ...]] = (ARTIFACTS_PREFIX, EXTRACTED_PREFIX)
 
 MAX_KEY_LENGTH: Final = 1024
 _BAD_KEY_CHARS: Final = re.compile(r"[\x00-\x1f\x7f\\]")
 
-#: MinIO settings — env only (A23); the keys are secrets, never YAML.
+#: MinIO settings — env only; the keys are secrets, never YAML.
 MINIO_ENDPOINT_ENV: Final = "VDREAMER_MINIO_ENDPOINT"
 MINIO_ACCESS_KEY_ENV: Final = "VDREAMER_MINIO_ACCESS_KEY"
 MINIO_SECRET_KEY_ENV: Final = "VDREAMER_MINIO_SECRET_KEY"
@@ -88,7 +88,7 @@ class ObjectStore(abc.ABC):
 
     @abc.abstractmethod
     def get_bytes(self, key: str) -> bytes | None:
-        """The object's bytes, or ``None`` when it does not exist (A9)."""
+        """The object's bytes, or ``None`` when it does not exist."""
 
     def get_to_file(self, key: str, dest: str | Path) -> bool:
         """Write the object to ``dest``; ``False`` when it does not exist."""
@@ -162,7 +162,7 @@ class InMemoryObjectStore(ObjectStore):
 
 
 class FilesystemObjectStore(ObjectStore):
-    """Objects as files under ``root`` (``vdreamer dev``, D11): ``root/<key>``."""
+    """Objects as files under ``root`` (``vdreamer dev``): ``root/<key>``."""
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -224,7 +224,7 @@ class FilesystemObjectStore(ObjectStore):
         older_than_s: float = RETENTION_DAYS * 86400,
         now: float | None = None,
     ) -> int:
-        """Delete objects under ``prefixes`` older than the retention (A9); returns the count.
+        """Delete objects under ``prefixes`` older than the retention; returns the count.
 
         The dev twin of the MinIO bucket lifecycle rule; ``vdreamer dev`` runs
         it at boot.
@@ -247,7 +247,7 @@ class MinioConfigError(Exception):
 
 
 class MinioObjectStore(ObjectStore):
-    """Objects in one MinIO bucket (PRD §2.1; the ``[minio]`` extra)."""
+    """Objects in one MinIO bucket (the ``[minio]`` extra)."""
 
     def __init__(self, client: Any, bucket: str = DEFAULT_BUCKET) -> None:
         self._client = client
@@ -282,7 +282,7 @@ class MinioObjectStore(ObjectStore):
         return cls(client, env.get(MINIO_BUCKET_ENV, "").strip() or DEFAULT_BUCKET)
 
     def setup(self, retention_days: int = RETENTION_DAYS) -> None:
-        """Create the bucket if missing and install the A9 lifecycle rule (``migrate``)."""
+        """Create the bucket if missing and install the lifecycle rule (``migrate``)."""
         from minio.commonconfig import ENABLED, Filter
         from minio.lifecycleconfig import Expiration, LifecycleConfig, Rule
 

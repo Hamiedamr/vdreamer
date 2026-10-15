@@ -1,4 +1,4 @@
-"""Agents, threads, runs, and their event streams (PRD §2.5, §3.1–§3.3)."""
+"""Agents, threads, runs, and their event streams."""
 
 from __future__ import annotations
 
@@ -76,13 +76,13 @@ def _thread_out(thread: ThreadRecord) -> ThreadOut:
 
 
 def _require_chat(agent_name: str, mode: Mode) -> None:
-    """Threads and runs are the chat path; headless agents use ``/trigger`` (D15)."""
+    """Threads and runs are the chat path; headless agents use ``/trigger``."""
     if mode is Mode.HEADLESS:
         raise ApiError(
             400,
             ErrorCode.MODE_NOT_SUPPORTED,
             f"agent {agent_name!r} is headless: start runs with POST "
-            f"{API_PREFIX}/agents/{agent_name}/trigger (D15)",
+            f"{API_PREFIX}/agents/{agent_name}/trigger",
         )
 
 
@@ -91,7 +91,7 @@ def _require_chat(agent_name: str, mode: Mode) -> None:
 
 @router.get("/agents", response_model=AgentList, responses=_AUTH_ERRORS, tags=["agents"])
 async def list_agents(backend: Backend, caller: Caller) -> AgentList:
-    """The registry (§2.5): every agent the caller's roles may use."""
+    """The registry: every agent the caller's roles may use."""
     agents = sorted(backend.agents.values(), key=lambda agent: agent.name)
     return AgentList(agents=[agent_out(agent) for agent in agents if can_use(agent, caller)])
 
@@ -103,7 +103,7 @@ async def list_agents(backend: Backend, caller: Caller) -> AgentList:
     tags=["agents"],
 )
 async def get_agent(name: str, backend: Backend, caller: Caller) -> AgentOut:
-    """One agent: mode and input JSON Schema (§2.5)."""
+    """One agent: mode and input JSON Schema."""
     agent = agent_or_404(backend, name)
     require_access(agent, caller)
     return agent_out(agent)
@@ -126,7 +126,7 @@ async def create_thread(
     response: Response,
     body: ThreadCreate | None = None,
 ) -> ThreadCreated:
-    """``201 {thread_id}`` — a new session owned by the caller (§2.5, §3.1)."""
+    """``201 {thread_id}`` — a new session owned by the caller."""
     agent = agent_or_404(backend, name)
     require_access(agent, caller)
     _require_chat(agent.name, agent.mode)
@@ -145,7 +145,7 @@ async def list_threads(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ThreadList:
-    """The caller's threads, newest first (owner-scoped, §2.5)."""
+    """The caller's threads, newest first (owner-scoped)."""
     threads = await backend.threads.list(caller.user_id, agent=agent, limit=limit, offset=offset)
     return ThreadList(
         threads=[_thread_out(thread) for thread in threads], limit=limit, offset=offset
@@ -159,7 +159,7 @@ async def list_threads(
     tags=["threads"],
 )
 async def get_thread(thread_id: str, backend: Backend, caller: Caller) -> ThreadDetail:
-    """The thread, its runs, and its history from the checkpoint (§2.5)."""
+    """The thread, its runs, and its history from the checkpoint."""
     thread = await owned_thread_or_404(backend, thread_id, caller)
     runs = await backend.queue.list_for_thread(thread.id)
     active = next((run for run in runs if run.status in ACTIVE_STATES), None)
@@ -190,7 +190,7 @@ async def get_thread(thread_id: str, backend: Backend, caller: Caller) -> Thread
     tags=["threads"],
 )
 async def delete_thread(thread_id: str, backend: Backend, caller: Caller) -> Response:
-    """Soft delete (§2.5). A thread with an active run must be cancelled first."""
+    """Soft delete. A thread with an active run must be cancelled first."""
     thread = await owned_thread_or_404(backend, thread_id, caller)
     runs = await backend.queue.list_for_thread(thread.id)
     active = next((run for run in runs if run.status in ACTIVE_STATES), None)
@@ -223,10 +223,10 @@ async def create_run(
     response: Response,
     wait_for_idle: bool = False,
 ) -> RunCreated:
-    """``{input, config?}`` → ``202 {run_id}``; ``409`` while the thread is busy (D12, A11).
+    """``{input, config?}`` → ``202 {run_id}``; ``409`` while the thread is busy.
 
     ``?wait_for_idle=true`` queues behind a ``running``/``awaiting_approval``
-    run instead of conflicting — never behind another ``queued`` one (§2.5).
+    run instead of conflicting — never behind another ``queued`` one.
     """
     thread = await owned_thread_or_404(backend, thread_id, caller)
     agent = agent_or_404(backend, thread.agent)
@@ -263,7 +263,7 @@ async def create_run(
     tags=["runs"],
 )
 async def get_run(run_id: str, backend: Backend, caller: Caller) -> RunOut:
-    """The run's status (§2.5, §3.2)."""
+    """The run's status."""
     run, _ = await owned_run_or_404(backend, run_id, caller)
     return run_out(run)
 
@@ -276,7 +276,7 @@ async def get_run(run_id: str, backend: Backend, caller: Caller) -> RunOut:
     tags=["runs"],
 )
 async def cancel_run(run_id: str, backend: Backend, caller: Caller) -> RunOut:
-    """Cancel (§2.5, §3.2): the row is ``cancelled`` at once; a running graph drains
+    """Cancel: the row is ``cancelled`` at once; a running graph drains
     cooperatively at its next superstep, once its worker's heartbeat notices
     (within half a lease window), leaving a resumable checkpoint."""
     run, _ = await owned_run_or_404(backend, run_id, caller)
@@ -309,7 +309,7 @@ async def cancel_run(run_id: str, backend: Backend, caller: Caller) -> RunOut:
 _LAST_EVENT_ID = Header(
     default=None,
     alias="Last-Event-ID",
-    description="Resume after this event id ('{run_id}:{seq}', §3.3).",
+    description="Resume after this event id ('{run_id}:{seq}').",
 )
 
 _SSE_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -349,7 +349,7 @@ async def run_events(
     caller: Caller,
     last_event_id: str | None = _LAST_EVENT_ID,
 ) -> StreamingResponse:
-    """SSE (§2.5, §3.3): replay ``seq > Last-Event-ID``, then tail live."""
+    """SSE: replay ``seq > Last-Event-ID``, then tail live."""
     run, _ = await owned_run_or_404(backend, run_id, caller)
     try:
         after = parse_last_event_id(last_event_id, run.id)
@@ -371,7 +371,7 @@ async def thread_events(
     caller: Caller,
     last_event_id: str | None = _LAST_EVENT_ID,
 ) -> StreamingResponse:
-    """SSE joining the thread's active — else latest — run (reattach after refresh, §2.5).
+    """SSE joining the thread's active — else latest — run (reattach after refresh).
 
     A ``Last-Event-ID`` naming that run resumes after it; one naming another
     (older) run replays the joined run from the start.

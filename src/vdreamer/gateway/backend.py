@@ -1,7 +1,7 @@
 """What one gateway process is built over: the agent registry plus the stores.
 
-The gateway is stateless (§2.1): everything it knows lives in Postgres (A7)
-— or, for ``vdreamer dev`` (D11) and the tests, in the in-memory twins of the
+The gateway is stateless: everything it knows lives in Postgres
+— or, for ``vdreamer dev`` and the tests, in the in-memory twins of the
 same stores. :class:`GatewayBackend` names those pieces; ``create_app`` turns
 one into the REST/SSE surface. The two topologies differ only here:
 
@@ -15,13 +15,12 @@ live fan-out   ``EventHub`` fed by          the ``InMemoryEventLog``'s hub
                ``PostgresEventListener``
 interrupts     ``PostgresInterruptStore``  ``InMemoryInterruptStore``
 artifacts      ``UnavailableArtifactStore``  ``InMemoryArtifactStore``
-               (until Milestone 6)
 checkpointer   ``AsyncPostgresSaver``      ``AsyncSqliteSaver`` / in-memory
 =============  =========================  ===============================
 
 The agents are loaded for their *declarations* only (name, mode,
 ``input_schema``, ``access_roles``) — the gateway never builds a graph; that is
-the worker's job (§2.2: "``build()`` runs once per worker").
+the worker's job ("``build()`` runs once per worker").
 """
 
 from __future__ import annotations

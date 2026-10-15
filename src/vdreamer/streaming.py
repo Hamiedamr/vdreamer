@@ -1,6 +1,6 @@
-﻿"""The one stream adapter module (PRD §2.4 "Event adapter", A31, A43).
+﻿"""The one stream adapter module.
 
-A31: **all** LangGraph streaming specifics live in this module and only here.
+**All** LangGraph streaming specifics live in this module and only here.
 Two drivers emit identical protocol events (:class:`EventEnvelope`,
 `vdreamer.events`) given the same graph execution, selected by the
 ``VDREAMER_STREAM_DRIVER`` environment variable:
@@ -9,7 +9,7 @@ Two drivers emit identical protocol events (:class:`EventEnvelope`,
   ``astream(stream_mode=["messages","updates","custom"], subgraphs=True,
   version="v2")``. v2 reports interrupts on ``values`` parts, which this
   driver does not subscribe to, so pending interrupts are read from
-  ``aget_state(config).interrupts`` after the stream ends (PRD §2.4).
+  ``aget_state(config).interrupts`` after the stream ends.
 - **v3** (:class:`V3StreamDriver`, opt-in, beta) —
   ``astream_events(version="v3")``, verified against the installed
   langgraph 1.2.15 (see the class docstring for the concrete API facts).
@@ -19,22 +19,22 @@ module-private mappers (:class:`_RunMapper` and friends), so the two drivers
 cannot drift: each driver only translates its native stream parts into
 ``mapper`` calls, and one shared code path turns those into protocol events.
 
-Event mapping (PRD §3.3, §4.2, §4.5/A44, D18/A20):
+Event mapping:
 
 - ``run.status`` — ``running`` at stream start, then ``completed`` /
   ``failed`` (with ``error {code, message}``) / ``awaiting_approval`` when
   pending interrupts exist.
 - ``token.delta`` / ``thinking.delta`` — per-message deltas, coalesced by
-  :class:`DeltaBatcher` (50 ms / 32 tokens at emission, §3.3).
+  :class:`DeltaBatcher` (50 ms / 32 tokens at emission).
   ``thinking.delta`` is suppressed entirely when ``expose_thinking`` is
   false (the spec is the driver's, not the payload model's).
-- ``message.completed`` — on message completion (§3.3 payload).
-- ``tool.call`` / ``tool.result`` — governed tools (§2.7,
-  ``vdreamer.governance``) are the single emitter: their records arrive as
+- ``message.completed`` — on message completion (payload).
+- ``tool.call`` / ``tool.result`` — governed tools (``vdreamer.governance``)
+  are the single emitter: their records arrive as
   custom data while the call runs, and the mapper turns them into the
   events. A call *nobody* governs falls back to the ungoverned mapping: its
   AIMessage ``tool_call`` is held, then emitted as ``tool.call`` with default
-  redaction (A33) right before its ToolMessage's ``tool.result`` — or at run
+  redaction right before its ToolMessage's ``tool.result`` — or at run
   end, if the call never ran (a review interrupt). Holding the call until it
   executes is what lets a governed record replace it: the AIMessage arrives
   before the mapper can know whether a policy will redact more.
@@ -42,13 +42,13 @@ Event mapping (PRD §3.3, §4.2, §4.5/A44, D18/A20):
   ``vdreamer.context.emit_*`` buffer/stream) become ``progress`` / ``log`` /
   ``artifact.created`` / ``citation`` events; any other custom data becomes
   a ``log`` event. Subgraph ``ns`` is preserved (root → ``[]``).
-- ``interrupt.requested`` — one per pending interrupt, normalized per §4.5
-  (A44): a dict interrupt value carrying its own ``kind`` (every
+- ``interrupt.requested`` — one per pending interrupt, normalized:
+  a dict interrupt value carrying its own ``kind`` (every
   ``require_approval`` value does) keeps it; a dict without ``kind`` or a
   non-dict ``interrupt(value)`` becomes kind ``"generic"`` with actions
   ``["respond"]``.
 
-No SSE transport lives here (that is the gateway's, M4); drivers are
+No SSE transport lives here (that is the gateway's); drivers are
 usable in-process against any :class:`vdreamer.eventlog.EventSink` —
 tests and ``vdreamer dev`` use :class:`InMemoryEventSink`.
 """
@@ -89,30 +89,30 @@ from vdreamer.events import (
     ToolResultPayload,
 )
 
-# The §4.5 kinds live with the record; re-exported here, where interrupts normalize.
+# The kinds live with the record; re-exported here, where interrupts normalize.
 from vdreamer.interrupts import MCP_ELICITATION_KIND as MCP_ELICITATION_KIND
 from vdreamer.interrupts import TOOL_REVIEW_KIND as TOOL_REVIEW_KIND
 from vdreamer.tools import redact_args
 
-#: Selects the stream driver (PRD §2.4, A43): ``v2`` (default, stable) or ``v3`` (beta).
+#: Selects the stream driver: ``v2`` (default, stable) or ``v3`` (beta).
 STREAM_DRIVER_ENV_VAR: Final[str] = "VDREAMER_STREAM_DRIVER"
 
-#: The valid :data:`STREAM_DRIVER_ENV_VAR` values (A43).
+#: The valid :data:`STREAM_DRIVER_ENV_VAR` values.
 VALID_STREAM_DRIVERS: Final[tuple[str, ...]] = ("v2", "v3")
 
-#: The vLLM/DeepSeek-style think format tags (PRD §3.3 line 212, D18). Built by
+#: The vLLM/DeepSeek-style think format tags. Built by
 #: concatenation so the literal tags never appear verbatim in this source file.
 _THINK_OPEN: Final[str] = "<" + "think" + ">"
 _THINK_CLOSE: Final[str] = "<" + "/" + "think" + ">"
 
 V2_STREAM_MODES: Final[tuple[str, ...]] = ("messages", "updates", "custom")
 
-#: Truncation for the ``log`` fallback of unshaped custom data (§3.3 has no
+#: Truncation for the ``log`` fallback of unshaped custom data (has no
 #: cap for logs; 500 chars keeps SSE frames small while staying readable).
 _LOG_FALLBACK_MAX_CHARS: Final[int] = 500
 
-#: ``tool.result`` summaries are capped (§2.7 step 5 uses 8,000 for governed
-#: results; the M2 ungoverned mapping applies the same cap to ToolMessages).
+#: ``tool.result`` summaries are capped (step 5 uses 8,000 for governed
+#: results; the ungoverned mapping applies the same cap to ToolMessages).
 _TOOL_SUMMARY_MAX_CHARS: Final[int] = 8000
 #: What ``tools.redact_args`` puts in place of a masked value.
 _REDACTED_VALUE: Final = "***"
@@ -121,9 +121,9 @@ _REDACTED_VALUE: Final = "***"
 def stream_driver_from_env(
     env: Mapping[str, str] | None = None,
 ) -> Literal["v2", "v3"]:
-    """Resolve :data:`STREAM_DRIVER_ENV_VAR` to ``"v2" | "v3"`` (A43).
+    """Resolve :data:`STREAM_DRIVER_ENV_VAR` to ``"v2" | "v3"``.
 
-    Default ``"v2"`` — the stable stream is the default driver (PRD §2.4).
+    Default ``"v2"`` — the stable stream is the default driver.
     Any other value is a :exc:`ValueError` naming the valid values. The
     check runs at run start (when a driver is made), never at import.
     """
@@ -148,7 +148,7 @@ def make_stream_driver(name: Literal["v2", "v3"] | str = "v2") -> StreamDriver:
 
 
 # ---------------------------------------------------------------------------
-# Delta batching (§3.3: "Deltas batched at emission (50 ms / 32 tokens)")
+# Delta batching ("Deltas batched at emission (50 ms / 32 tokens)")
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +161,7 @@ class _Batch:
 
 
 class DeltaBatcher:
-    """Coalesce consecutive deltas per message (PRD §3.3, WP2 drivers' shared core).
+    """Coalesce consecutive deltas per message (drivers' shared core).
 
     Both drivers feed the same batcher: ``add`` buffers text per
     ``(kind, message_id)`` key (``kind`` discriminates ``token`` from
@@ -174,7 +174,7 @@ class DeltaBatcher:
     ``run.status``. The clock is injectable for tests.
 
     Timing thresholds default to :data:`DELTA_BATCH_INTERVAL_S` /
-    :data:`DELTA_BATCH_MAX_TOKENS` (§3.3 line 211).
+    :data:`DELTA_BATCH_MAX_TOKENS`.
     """
 
     def __init__(
@@ -224,12 +224,12 @@ class DeltaBatcher:
 
 
 # ---------------------------------------------------------------------------
-# Thinking extraction (§3.3 line 212, D18/A20)
+# Thinking extraction
 # ---------------------------------------------------------------------------
 
 
 class ThinkTagSplitter:
-    """Stateful think-tag splitter (PRD §3.3 line 212: "tags may span chunks").
+    """Stateful think-tag splitter ("tags may span chunks").
 
     The third thinking-extraction fallback, after standard ``reasoning``
     content blocks and the vLLM ``reasoning_content`` field: content
@@ -240,8 +240,8 @@ class ThinkTagSplitter:
     the same instance; one splitter lives per message (the driver keys them
     by ``message_id``).
 
-    **Wiring:** a *per-alias* fallback (PRD §3.3 line 212). The drivers do
-    not route text through it: since Milestone 7 a ``thinking: think_tags``
+    **Wiring:** a *per-alias* fallback. The drivers do
+    not route text through it: a ``thinking: think_tags``
     alias parses its tags at the model layer (``vdreamer.models``), so the
     chunks arrive here as standard ``reasoning`` blocks — on both drivers,
     in the final message, and in the history sent back to the model. This
@@ -249,7 +249,7 @@ class ThinkTagSplitter:
 
     If the stream ends without any closing tag (a model that turned out not
     to use the think format), :meth:`close` routes the held-back tail as
-    *text* — a judgment call the PRD does not cover: treating it as thinking
+    *text* — a judgment call the does not cover: treating it as thinking
     would mislabel every token of a non-think model.
     """
 
@@ -293,15 +293,15 @@ class ThinkTagSplitter:
 
 
 def chunk_text_and_thinking(chunk: BaseMessage) -> tuple[str, str]:
-    """One streaming chunk → ``(text_delta, thinking_delta)`` (D18/A20 order).
+    """One streaming chunk → ``(text_delta, thinking_delta)`` (reasoning blocks first).
 
     1. Standard ``reasoning``/``thinking`` content blocks on the chunk — any
        reasoning text found wins for the chunk.
     2. The vLLM-style ``reasoning_content`` additional field.
 
-    3. Think tags, the *per-alias* fallback (PRD §3.3 line 212: "per-alias
+    3. Think tags, the *per-alias* fallback ("per-alias
        fallbacks apply"), are **not parsed here**: the ``models.yaml``
-       alias's ``thinking`` mode (``vdreamer.models``, Milestone 7) turns
+       alias's ``thinking`` mode (``vdreamer.models``) turns
        ``reasoning_content`` fields and ``<think>`` tags into standard
        ``reasoning`` blocks inside the chat model, so both drivers read
        rule 1 and stay at parity.
@@ -338,18 +338,18 @@ def chunk_text_and_thinking(chunk: BaseMessage) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Interrupt normalization (§4.2 record, §4.5/A44)
+# Interrupt normalization (record)
 # ---------------------------------------------------------------------------
 
 
 def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayload:
-    """One interrupt value → the ``interrupt.requested`` payload (§4.5, A44).
+    """One interrupt value → the ``interrupt.requested`` payload.
 
     A dict value carrying its own ``kind`` (every ``require_approval``
     value does) declares its own ``actions``/``approver_role``/``scope``/
     ``edit_schema``/TTL. A dict without ``kind`` or a raw non-dict
     ``interrupt(value)`` normalizes to kind ``"generic"`` with the single
-    action ``"respond"`` (§4.5 table); the resolver payload rides the
+    action ``"respond"`` (table); the resolver payload rides the
     ``payload`` field verbatim.
     """
     if (
@@ -359,7 +359,7 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
     ):
         return _normalize_tool_review(value, interrupt_id)
     if isinstance(value, Mapping) and value.get("type") == MCP_ELICITATION_KIND:
-        # langchain.mcp elicitation (§4.5): answered with edit (the form
+        # langchain.mcp elicitation: answered with edit (the form
         # answers) or reject (decline); the gateway builds {"responses": ...}.
         requests = value.get("requests")
         return InterruptRequestedPayload(
@@ -397,7 +397,7 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
         )
     if isinstance(value, Mapping):
         # Raw ``interrupt(dict)`` — generic; the dict is the responder payload
-        # verbatim (§4.5 "resolver payload, verbatim").
+        # verbatim (the resolver's payload, as sent).
         return InterruptRequestedPayload(
             interrupt_id=interrupt_id,
             kind="generic",
@@ -415,10 +415,10 @@ def normalize_interrupt(value: Any, interrupt_id: str) -> InterruptRequestedPayl
 def _normalize_tool_review(
     value: Mapping[str, Any], interrupt_id: str
 ) -> InterruptRequestedPayload:
-    """``HumanInTheLoopMiddleware``'s ``HITLRequest`` → kind ``tool_review`` (§4.5).
+    """``HumanInTheLoopMiddleware``'s ``HITLRequest`` → kind ``tool_review``.
 
     The payload keeps the request's shape — ``action_requests[]`` (each call's
-    ``name``/``args``/``description``, args redacted with the A33 defaults: the
+    ``name``/``args``/``description``, args redacted with the defaults: the
     approver judges the call, an ``approve`` runs the model's own) and
     ``review_configs[]`` (each tool's ``allowed_decisions``, ``args_schema``).
     ``actions`` is the union of the allowed decisions, in first-seen order; the
@@ -459,10 +459,10 @@ def _normalize_tool_review(
 def _tool_call_envelope(
     envelope: EnvelopeFn, ns: Sequence[str], tool_call: Mapping[str, Any]
 ) -> EventEnvelope:
-    """One AIMessage ``tool_call`` dict → ``tool.call`` with default redaction (A33).
+    """One AIMessage ``tool_call`` dict → ``tool.call`` with default redaction.
 
     ``source`` is ``"custom"``: an ungoverned call carries no tool object to
-    classify (§2.4: ungoverned tool messages are mapped with default
+    classify (ungoverned tool messages are mapped with default
     redaction); governed calls report their real source.
     """
     args = tool_call.get("args")
@@ -484,8 +484,8 @@ def _tool_result_envelope(
     """One ToolMessage → ``tool.result`` (ungoverned mapping).
 
     ``duration_ms`` is 0 and ``artifact_ids`` empty — timing and overflow
-    artifacts are the governance pipeline's (§2.7 steps 5/7). Full output is
-    never streamed (§3.3): the content text rides ``summary`` capped at 8,000.
+    artifacts are the governance pipeline's (steps 5/7). Full output is
+    never streamed: the content text rides ``summary`` capped at 8,000.
     """
     status = str(getattr(message, "status", None) or "ok")
     content = message.text
@@ -543,7 +543,7 @@ class _RunMapper:
     def envelope(
         self, type_: EventType, payload: Mapping[str, Any], ns: Sequence[str] = ()
     ) -> EventEnvelope:
-        """Build one envelope with the next ``seq`` (§3.3 field order)."""
+        """Build one envelope with the next ``seq`` (field order)."""
         return EventEnvelope(
             type=type_,
             run_id=self._spec.run_id,
@@ -557,7 +557,7 @@ class _RunMapper:
     # -- run.status --------------------------------------------------------
 
     def start(self) -> EventEnvelope:
-        """``run.status`` ``running`` at stream start (§3.3)."""
+        """``run.status`` ``running`` at stream start."""
         return self.envelope(
             EventType.RUN_STATUS,
             RunStatusPayload(status="running", attempt=self._spec.attempt).event_payload(),
@@ -573,7 +573,7 @@ class _RunMapper:
 
         The final ``run.status`` is ``failed`` (with the ``error`` block)
         on an exception, ``awaiting_approval`` when pending interrupts
-        exist, else ``completed`` (§3.2/§3.3).
+        exist, else ``completed``.
         """
         out: list[EventEnvelope] = []
         for (kind, message_id), text in self._batcher.flush_all():
@@ -603,8 +603,8 @@ class _RunMapper:
             payload = RunStatusPayload(
                 status="failed",
                 attempt=self._spec.attempt,
-                # NodeTimeoutError/NodeError get stable codes in M3 (§2.4);
-                # M2 carries the generic code.
+                # NodeTimeoutError/NodeError get stable codes;
+                # carries the generic code.
                 error=ErrorInfo(code="node_error", message=str(error)),
             ).event_payload()
         else:
@@ -623,7 +623,7 @@ class _RunMapper:
         """One message-stream chunk → batched ``token.delta`` / ``thinking.delta``.
 
         Thinking is suppressed entirely when ``expose_thinking`` is false
-        (§3.3) — no ``thinking.delta`` events and no ``thinking`` on
+        — no ``thinking.delta`` events and no ``thinking`` on
         ``message.completed``.
         """
         out: list[EventEnvelope] = []
@@ -664,7 +664,7 @@ class _RunMapper:
     # -- custom data -------------------------------------------------------
 
     def custom(self, ns: Sequence[str], data: Any) -> list[EventEnvelope]:
-        """Custom stream data → protocol events (§2.4 "Both").
+        """Custom stream data → protocol events .
 
         Vdreamer-enveloped records (the shapes ``emit_progress`` /
         ``emit_log`` / ``emit_artifact`` / ``emit_citation`` produce) become
@@ -746,10 +746,10 @@ class _RunMapper:
         ]
 
     def _artifact_event(self, ns: Sequence[str], data: Mapping[str, Any]) -> EventEnvelope:
-        """An ``artifact`` record → ``artifact.created`` (§3.4).
+        """An ``artifact`` record → ``artifact.created``.
 
         Every record carries its mime type, size, and preview; one the store
-        kept (``stored``: bytes and metadata row already written, D7) also
+        kept (``stored``: bytes and metadata row already written) also
         carries the gateway URLs. With no store bound (tests, a runner driven
         without a worker) nothing is servable, so no URLs.
         """
@@ -786,7 +786,7 @@ class _RunMapper:
     def _governed_tool_event(
         self, ns: Sequence[str], data: Mapping[str, Any]
     ) -> list[EventEnvelope]:
-        """A governance record → its ``tool.call`` / ``tool.result`` (§2.7 steps 2/7)."""
+        """A governance record → its ``tool.call`` / ``tool.result`` (steps 2/7)."""
         call_id = str(data.get("tool_call_id") or "")
         if data.get("type") == "tool.call" and data.get("id_assigned"):
             bound = self._bind_held_call(ns, data)
@@ -870,7 +870,7 @@ class _RunMapper:
 
         Only AI messages emit ``message.completed`` — token deltas only come
         from model calls, and human/tool activity reaches the client through
-        its own turn and ``tool.result`` (a judgment call the PRD leaves to
+        its own turn and ``tool.result`` (a judgment call the leaves to
         the drivers; it also keeps v2 (updates parts) and v3 (values parts)
         at parity, since input messages otherwise appear only on the values
         channel). Dedup is by message id: v3 values parts re-deliver the
@@ -927,7 +927,7 @@ class _RunMapper:
 
 
 # ---------------------------------------------------------------------------
-# The drivers (A31)
+# The drivers
 # ---------------------------------------------------------------------------
 
 
@@ -950,7 +950,7 @@ class StreamSpec:
 
 
 class StreamDriver(ABC):
-    """Base for the protocol-event adapters (A31): one per LangGraph streaming API.
+    """Base for the protocol-event adapters: one per LangGraph streaming API.
 
     ``astream`` is an async generator of :class:`EventEnvelope` usable
     without any live Postgres (tests run compiled graphs on
@@ -977,7 +977,7 @@ class StreamDriver(ABC):
 
 
 class V2StreamDriver(StreamDriver):
-    """The default, stable driver (PRD §2.4/A43): ``astream(version="v2")``.
+    """The default, stable driver: ``astream(version="v2")``.
 
     Verified against langgraph 1.2.15: with ``version="v2"`` and a
     ``stream_mode`` sequence, ``astream`` yields dicts
@@ -988,7 +988,7 @@ class V2StreamDriver(StreamDriver):
 
     Pending interrupts are read from ``aget_state(config).interrupts`` after
     the stream ends (v2 reports interrupts on ``values`` parts, which this
-    driver does not subscribe to — PRD §2.4). When the graph has no
+    driver does not subscribe to). When the graph has no
     checkpointer (``aget_state`` raises ``ValueError: No checkpointer set``),
     the driver falls back to the ``__interrupt__`` ``updates`` parts
     collected during the stream, and reconstructs the final value by
@@ -1094,7 +1094,7 @@ class V2StreamDriver(StreamDriver):
 
 
 class V3StreamDriver(StreamDriver):
-    """The opt-in beta driver (PRD §2.4/A43): ``astream_events(version="v3")``.
+    """The opt-in beta driver: ``astream_events(version="v3")``.
 
     API facts verified against the installed langgraph 1.2.15 (do not
     invent event names — v3 here is *not* langchain-core's
@@ -1113,7 +1113,7 @@ class V3StreamDriver(StreamDriver):
       ``delta``), ``message-finish`` (``usage``). Deltas are
       ``{"type": "text-delta", "text"}`` / ``{"type": "reasoning-delta",
       "reasoning"}`` — ``data-delta``/``block-delta`` carry no message text
-      and are skipped in M2 (recorded gap; the WP3 golden suite gates v3).
+      and are skipped (recorded gap; the golden suite gates v3).
     - ``values`` events carry the full state plus
       ``params["interrupts"]`` (Interrupt objects); ``custom`` events carry
       the stream writer's data verbatim.
@@ -1180,7 +1180,7 @@ class V3StreamDriver(StreamDriver):
             # Idempotent: no-op once the run is exhausted, cancels on error paths.
             await run.abort()
         if not interrupts and spec.has_checkpointer:
-            # Fallback per §2.4: read the run's pending interrupts directly.
+            # Fallback: read the run's pending interrupts directly.
             try:
                 snapshot = await graph.aget_state(config)
             except Exception:  # noqa: S110 - best-effort fallback only
@@ -1234,7 +1234,7 @@ class V3StreamDriver(StreamDriver):
                     return mapper.chunk(ns, message_id, str(delta.get("text") or ""), "")
                 if delta_type == "reasoning-delta":
                     return mapper.chunk(ns, message_id, "", str(delta.get("reasoning") or ""))
-                return []  # data-delta / block-delta: M2 gap, see class docstring
+                return []  # data-delta / block-delta: gap, see class docstring
             return []
         if method == "values":
             for interrupt in params.get("interrupts") or ():

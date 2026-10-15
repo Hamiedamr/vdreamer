@@ -1,20 +1,17 @@
 """Postgres-backed persistence: the checkpointer and store factories, durability policy.
 
-PRD §2.4 ("Persistence" row of the native-primitives table): vdreamer uses
-``AsyncPostgresSaver`` and never reimplements checkpointing. Durability is
-``"sync"`` by default because crash recovery (A6) needs every step
-checkpointed; agents may opt into ``"async"`` per agent (A42). Connection
-strings come from the environment, never YAML (A23).
+vdreamer uses LangGraph's ``AsyncPostgresSaver`` and never reimplements
+checkpointing. Durability is ``"sync"`` by default because crash recovery
+needs every step checkpointed; agents may opt into ``"async"`` per agent.
+Connection strings come from the environment, never YAML.
 
-Milestone 3 note: ``vdreamer dev`` runs on SQLite + a local filesystem store
-(D11) — that mode is *not* this module's concern. This module is the Postgres
-saver factory the ``vdreamer worker`` composes with queue and store wiring.
+:func:`open_store` opens LangGraph's ``AsyncPostgresStore`` (the long-term
+memory store) on the same DSN, runs its migrations, and yields it — workers
+hand it to ``build()`` as ``ctx.store`` (``agent_kwargs()["store"]``) and
+``vdreamer migrate`` applies its tables.
 
-Milestone 10 adds the long-term memory store (§2.4 "store" row):
-:func:`open_store` opens LangGraph's ``AsyncPostgresStore`` on the same DSN,
-runs its migrations, and yields it — workers hand it to ``build()`` as
-``ctx.store`` (``agent_kwargs()["store"]``) and ``vdreamer migrate`` applies
-its tables. ``vdreamer dev`` uses ``AsyncSqliteStore`` on the dev file.
+``vdreamer dev`` runs on SQLite instead (``AsyncSqliteSaver`` /
+``AsyncSqliteStore`` on the dev file); that mode is not this module's concern.
 """
 
 from __future__ import annotations
@@ -31,20 +28,20 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from langgraph.store.postgres.aio import AsyncPostgresStore
 
-#: Per-superstep invocation durability (PRD §2.4, A42).
+#: Per-superstep invocation durability.
 Durability: TypeAlias = Literal["sync", "async"]
 
-#: "sync" by default: crash recovery (A6) needs every step checkpointed (A42).
+#: "sync" by default: crash recovery needs every step checkpointed.
 DEFAULT_DURABILITY: Final[Durability] = "sync"
 
-#: The Postgres DSN environment variable (A23): connection strings come from
+#: The Postgres DSN environment variable: connection strings come from
 #: the environment, never YAML and never the command line. ``vdreamer worker``
 #: and ``vdreamer migrate`` resolve it here, at startup, via :func:`dsn_from_env`.
 PG_DSN_ENV_VAR: Final[str] = "VDREAMER_PG_DSN"
 
 
 class PersistenceConfigError(RuntimeError):
-    """Persistence configuration is missing or unusable (A23)."""
+    """Persistence configuration is missing or unusable."""
 
 
 class MissingPostgresDependencyError(RuntimeError):
@@ -52,13 +49,13 @@ class MissingPostgresDependencyError(RuntimeError):
 
 
 def durability_for(agent: Any) -> Durability:
-    """Return the agent's invocation durability, defaulting to ``"sync"`` (A42).
+    """Return the agent's invocation durability, defaulting to ``"sync"``.
 
     ``BaseAgent`` declares ``durability``; the defensive ``getattr`` treats
     agents without the attribute (agents written before it existed, test
     doubles) as the default instead of failing. Invalid values raise here —
     at registration — rather than surfacing as a silent durability change
-    mid-run, when crash recovery (A6) would depend on it.
+    mid-run, when crash recovery would depend on it.
     """
     value = getattr(agent, "durability", DEFAULT_DURABILITY)
     if value not in ("sync", "async"):
@@ -70,7 +67,7 @@ def durability_for(agent: Any) -> Durability:
 
 
 def dsn_from_env(name: str) -> str:
-    """Resolve a Postgres DSN from an environment variable (A23).
+    """Resolve a Postgres DSN from an environment variable.
 
     Connection strings never appear in YAML: config references the variable
     name and the worker resolves it here, at startup, where a missing value
@@ -81,7 +78,7 @@ def dsn_from_env(name: str) -> str:
     except KeyError:
         raise PersistenceConfigError(
             f"environment variable {name} is not set "
-            "(A23: connection strings come from env, never YAML)"
+            "(connection strings come from env, never YAML)"
         ) from None
 
 
@@ -108,7 +105,7 @@ def _load_saver_class() -> type[AsyncPostgresSaver]:
 
 @asynccontextmanager
 async def open_checkpointer(dsn: str) -> AsyncGenerator[AsyncPostgresSaver]:
-    """Open the worker's checkpointer: connect, migrate, then yield (PRD §2.4).
+    """Open the worker's checkpointer: connect, migrate, then yield.
 
     A worker holds this open for its lifetime — one saver per process, shared
     by every agent and run via ``compile(checkpointer=...)`` /
@@ -118,7 +115,7 @@ async def open_checkpointer(dsn: str) -> AsyncGenerator[AsyncPostgresSaver]:
 
     Per-run invocation durability — the ``"sync"``/``"async"`` passed to
     ``ainvoke`` — comes from ``durability_for(agent)``, threaded by the
-    runtime; the checkpointer instance is the same either way (A42 is about
+    runtime; the checkpointer instance is the same either way (is about
     invocation durability, not a different saver).
     """
     saver_cls = _load_saver_class()
@@ -141,11 +138,11 @@ def _load_store_class() -> type[AsyncPostgresStore]:
 
 @asynccontextmanager
 async def open_store(dsn: str) -> AsyncGenerator[AsyncPostgresStore]:
-    """Open the worker's long-term memory store: connect, migrate, then yield (§2.4).
+    """Open the worker's long-term memory store: connect, migrate, then yield.
 
     One store per worker process, like the checkpointer; ``build()`` receives
     it as ``ctx.store``. vdreamer never reimplements it (LangGraph's own
-    ``AsyncPostgresStore``, no vector index — retrieval is agent code, §7.2).
+    ``AsyncPostgresStore``, no vector index — retrieval is agent code).
     """
     store_cls = _load_store_class()
     async with store_cls.from_conn_string(dsn) as store:

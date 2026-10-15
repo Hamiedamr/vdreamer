@@ -1,6 +1,6 @@
 # Building a client for vdreamer protocol 1.0
 
-For client teams (web apps, back ends, integrations). vdreamer ships no client code (PRD §6, A45). What it ships is:
+For client teams (web apps, back ends, integrations). vdreamer ships no client code. What it ships is:
 
 - `vdreamer export-schema` output:
   - `openapi.json` (OpenAPI 3.1)
@@ -13,18 +13,18 @@ Every release attaches both. This page is the normative behavior around them. "M
 
 ## 1. Talking to the gateway
 
-Browsers never talk to the gateway directly. A Web Backend authenticates the user (LDAP, SSO …; vdreamer has no end-user auth, D13) and proxies `/api/v1/**` (§3). Every request it forwards carries:
+Browsers never talk to the gateway directly. A Web Backend authenticates the user (LDAP, SSO …; vdreamer has no end-user auth) and proxies `/api/v1/**`. Every request it forwards carries:
 
 | Header | Value |
 |---|---|
 | `Authorization` | `Bearer <VDREAMER_INTERNAL_TOKEN>`, never exposed to the browser |
 | `X-User-Id` | the authenticated user |
 | `X-User-Roles` | comma-separated roles (may be empty) |
-| `X-Protocol-Version` | `1`. The client MUST send it and MUST refuse a response whose `X-Protocol-Version` major is not `1` (§6.1). |
+| `X-Protocol-Version` | `1`. The client MUST send it and MUST refuse a response whose `X-Protocol-Version` major is not `1`. |
 
 Errors are always `{"error": {"code", "message", "details?"}}`. Branch on `code`, never on `message`.
 
-Upstream systems (a mail worker, a scheduler) call `POST /agents/{name}/trigger` with a service token instead (A16). See `openapi.json`.
+Upstream systems (a mail worker, a scheduler) call `POST /agents/{name}/trigger` with a service token instead. See `openapi.json`.
 
 ## 2. A run's lifecycle, from the client's side
 
@@ -33,12 +33,12 @@ Upstream systems (a mail worker, a scheduler) call `POST /agents/{name}/trigger`
    - One active run per thread: while a run is `running`/`awaiting_approval`, a new one is `409 run_conflict` (`details.active_run_id`).
    - Block the prompt box meanwhile, or pass `?wait_for_idle=true` to queue behind it.
 3. `GET /api/v1/runs/{run_id}/events` (SSE) until a terminal `run.status`: `completed`, `failed`, `rejected`, `expired`, `cancelled`. The server closes the stream after it.
-4. `awaiting_approval` is **not** terminal. The stream stays open (heartbeats) while the run waits for a human (§5).
+4. `awaiting_approval` is **not** terminal. The stream stays open (heartbeats) while the run waits for a human.
 5. `POST /api/v1/runs/{run_id}/cancel` stops it.
 
 ## 3. Consuming SSE (MUST)
 
-- **Use `fetch` streaming** (D14), not `EventSource`: custom headers are needed, and the Web Backend adds them server-side.
+- **Use `fetch` streaming**, not `EventSource`: custom headers are needed, and the Web Backend adds them server-side.
 - **Heartbeats** are SSE comments (`: …`) every 15 s. Ignore them, but treat a 2× heartbeat silence as a dead connection.
 - **Reconnect** on any drop with exponential backoff plus jitter (for example 0.5 s doubling to 30 s, ±25 %). Send `Last-Event-ID: <the last id you applied>`. The server replays everything after it, so nothing is lost.
 - **Page refresh:** rebuild from `GET /api/v1/threads/{thread_id}/events`, which replays every run of the thread in order. Then continue on the active run's stream.
@@ -61,7 +61,7 @@ Fold the events into one state per thread view:
 
 Prove it: replay every `conformance/*.json` recording (only the `sse` steps, honoring `reset`) and compare with its `expected_state`. Exact equality is expected for the fields listed. A client may keep more.
 
-## 5. Interrupts (MUST, §6.4)
+## 5. Interrupts (MUST)
 
 An `interrupt.requested` event (and `GET /api/v1/interrupts` for the inbox) carries:
 
@@ -82,12 +82,12 @@ An `interrupt.requested` event (and `GET /api/v1/interrupts` for the inbox) carr
 
 - **`409`** means someone resolved or edited first. Refresh the record (`GET /interrupts/{id}`) and show the new state.
 - **`410`** means it expired: the run ended `expired`.
-- **`403 forbidden_role`** means this user may not decide. `details.reason: "four_eyes"` means the initiator may not approve their own `scope` (A32).
+- **`403 forbidden_role`** means this user may not decide. `details.reason: "four_eyes"` means the initiator may not approve their own `scope`.
 - Headless runs (`/trigger`) end `rejected` on a `reject`, and nothing resumes.
 
 After a successful resolve, the run is re-queued and the **same `run_id`** continues: keep reading (or reconnect to) `/runs/{run_id}/events`.
 
-## 6. Artifacts and citations (§6.3, non-normative hints)
+## 6. Artifacts and citations (non-normative hints)
 
 | Kind | Rendering | Source |
 |---|---|---|
@@ -100,13 +100,13 @@ After a successful resolve, the run is re-queued and the **same `run_id`** conti
 - `html` artifacts link to other artifacts with `artifact://<id>`. Rewrite those to the artifact's URL.
 - A citation binds to `message_id` and opens `source.artifact_id` (or `source.uri`) at `locator.page`.
 
-## 7. Web Backend proxy requirements (§6.2)
+## 7. Web Backend proxy requirements
 
 - Proxy `/api/v1/**` and inject the token and identity headers server-side.
 - **No SSE buffering** anywhere on the path (nginx: `proxy_buffering off`, plus `X-Accel-Buffering: no`).
 - Idle/read timeout **> 2× heartbeat**, so above 30 s.
 - **Forward `Last-Event-ID`** both ways.
-- Serve artifact URLs same-origin, so `<img>`/`<a>` links work with the session cookie and no JS-attached headers (A25).
+- Serve artifact URLs same-origin, so `<img>`/`<a>` links work with the session cookie and no JS-attached headers.
 
 ## 8. Trying it from a terminal
 

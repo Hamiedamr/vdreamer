@@ -1,6 +1,6 @@
 # vdreamer protocol 1.0 — conformance kit
 
-Recorded SSE streams from a real vdreamer gateway, each paired with the client state a conforming client must reach (PRD §6.1). Port your client's SSE handling and event fold, replay every recording through them, and compare with `expected_state`. vdreamer ships no client code. These files and `docs/protocol.md` are the contract.
+Recorded SSE streams from a real vdreamer gateway, each paired with the client state a conforming client must reach. Port your client's SSE handling and event fold, replay every recording through them, and compare with `expected_state`. vdreamer ships no client code. These files and `docs/protocol.md` are the contract.
 
 ## Recordings
 
@@ -43,7 +43,7 @@ Generated ids and timestamps are normalized (`run_1`, `thread_1`, `int_1`, `art_
   - `last_event_id` is the `Last-Event-ID` header the client sent.
   - `dropped: true` means the client closed the connection after the last event shown (the server never sent an end).
   - `reset: true` (in `reconnect.json`) means the client reloaded the page: it discards its state and rebuilds it from that response.
-- **`resolve` steps:** the REST call the client made between streams, with the body it sent. Replay tools only need the SSE steps. The resolve steps show the matching request shape per interrupt source (§4.5).
+- **`resolve` steps:** the REST call the client made between streams, with the body it sent. Replay tools only need the SSE steps. The resolve steps show the matching request shape per interrupt source.
 
 ## The fold (normative)
 
@@ -83,4 +83,4 @@ Feed every `sse` step's events in order, keeping state across steps (unless `res
 | `progress` | replace `progress` |
 | `log` | append |
 
-**Ids, not order, identify things.** When an interrupt is resolved, the run resumes by re-executing the interrupted node from the top (PRD §4). The events that node emitted before the pause are emitted again with the same ids (`message.completed`, `tool.call`). Upsert by id; never append a second entry. `interrupt_tool_review.json` shows this.
+**Ids, not order, identify things.** When an interrupt is resolved, the run resumes by re-executing the interrupted node from the top. The events that node emitted before the pause are emitted again with the same ids (`message.completed`, `tool.call`). Upsert by id; never append a second entry. `interrupt_tool_review.json` shows this.

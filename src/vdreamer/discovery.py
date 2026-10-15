@@ -1,10 +1,9 @@
-"""Agent discovery (D2): import specs, a ``vdreamer.yaml`` registry, or an agents dir.
+"""Agent discovery: import specs, a ``vdreamer.yaml`` registry, or an agents dir.
 
 ``pkg.module:agent`` specs are the base case that ``vdreamer validate`` and CI
-use directly (:func:`load_agent`). All three D2 forms resolve through
-:func:`resolve_agent`: ``vdreamer validate --registry`` / ``--agents-dir``
-landed with Milestone 1, while ``vdreamer serve`` / ``vdreamer worker`` gain
-the same flags with Milestone 3.
+use directly (:func:`load_agent`). All three forms resolve through
+:func:`resolve_agent`; ``validate``, ``dev``, ``worker`` and ``serve`` all take
+``--registry`` / ``--agents-dir``.
 
 ``vdreamer.yaml`` registry shape (``yaml.safe_load``; no agent is imported at
 registry time — resolution loads lazively through :func:`load_agent`):
@@ -14,13 +13,13 @@ registry time — resolution loads lazively through :func:`load_agent`):
       pinger: pinger:agent
 
 Registries carry references, never secrets: YAML may reference secrets only
-via ``*_env`` keys (A23), the registry shape holds import specs only, and any
+via ``*_env`` keys, the registry shape holds import specs only, and any
 other top-level key is a shape violation (:class:`RegistryError`).
 
 ``--agents-dir`` is a flat directory of ``*.py`` modules exposing module-level
 ``BaseAgent`` instances (:func:`discover_agents_dir`): files starting with
 ``_`` are skipped, a module that fails to import is logged and skipped — one
-broken module never kills discovery — and subdirectories are not scanned (M1
+broken module never kills discovery — and subdirectories are not scanned (a known
 limitation; package agents are reached by spec or registry entry instead).
 """
 
@@ -99,7 +98,7 @@ def load_registry(path: str | Path) -> dict[str, str]:
     Raises:
         RegistryError: the file is missing or unreadable, is not valid YAML,
             is not a mapping, carries top-level keys other than ``agents`` (a
-            registry holds references, never secrets — A23), lacks the
+            registry holds references, never secrets), lacks the
             ``agents`` key, or its ``agents`` is empty / not a mapping / has
             entries whose name or spec is not a string.
     """
@@ -121,7 +120,7 @@ def load_registry(path: str | Path) -> dict[str, str]:
     if unexpected:
         raise RegistryError(
             f"registry {registry_path} has unexpected top-level keys {unexpected!r}; "
-            "a registry maps agent names to import specs and never holds secrets (A23)"
+            "a registry maps agent names to import specs and never holds secrets"
         )
     if "agents" not in loaded:
         raise RegistryError(f"registry {registry_path} has no 'agents' key")
@@ -182,7 +181,7 @@ def discover_agents_dir(path: str | Path) -> dict[str, BaseAgent]:
     module never kills discovery — and so are instances whose name is empty
     or already taken (the first module in sorted order wins). A module
     yielding zero agents is fine (logged at debug). Subdirectories are not
-    scanned (M1 limitation); package agents are reached by spec or registry
+    scanned (limitation); package agents are reached by spec or registry
     entry instead.
 
     Raises:
@@ -226,7 +225,7 @@ def resolve_agent(
     registry: str | Path | None = None,
     agents_dir: str | Path | None = None,
 ) -> BaseAgent:
-    """Resolve an agent by spec, registry name, or agents dir (D2).
+    """Resolve an agent by spec, registry name, or agents dir.
 
     Resolution order:
 

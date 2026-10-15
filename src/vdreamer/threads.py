@@ -1,19 +1,19 @@
-"""Threads: the session record behind ``/agents/{name}/threads`` (PRD §2.5, §3.1).
+"""Threads: the session record behind ``/agents/{name}/threads``.
 
-``thread_id`` is the session (§3.1). The gateway creates one per
+``thread_id`` is the session. The gateway creates one per
 ``POST /agents/{name}/threads`` and scopes every read to its ``owner_id``
-(``X-User-Id``, D13): ``GET /threads`` lists only the caller's threads, and a
+(``X-User-Id``): ``GET /threads`` lists only the caller's threads, and a
 thread someone else owns is indistinguishable from a missing one. Deletion is
-soft (§2.5): the row stays, stamped ``deleted_at``, and disappears from every
+soft: the row stays, stamped ``deleted_at``, and disappears from every
 read.
 
 The thread's conversation state is *not* here — it lives in the agent's
-checkpoints, keyed by the same ``thread_id`` (§2.4); ``GET /threads/{id}``
+checkpoints, keyed by the same ``thread_id``; ``GET /threads/{id}``
 reads its history from the checkpointer. This table only holds what the
 checkpointer does not know: which agent the thread belongs to, who owns it,
 and whether it was deleted.
 
-``InMemoryThreadStore`` backs ``vdreamer dev`` (D11) and the tests;
+``InMemoryThreadStore`` backs ``vdreamer dev`` and the tests;
 ``PostgresThreadStore`` is production and reuses the queue's lazy-psycopg
 seam. ``THREADS_DDL`` is applied by ``vdreamer migrate``.
 """
@@ -46,12 +46,12 @@ class ThreadRecord:
 
 
 def new_thread_id() -> str:
-    """A fresh thread id — one thread is one session (PRD §3.1)."""
+    """A fresh thread id — one thread is one session."""
     return f"thread_{uuid.uuid4().hex}"
 
 
 class ThreadStore(abc.ABC):
-    """Owner-scoped thread records (§2.5). Soft-deleted threads are invisible."""
+    """Owner-scoped thread records. Soft-deleted threads are invisible."""
 
     @abc.abstractmethod
     async def create(
@@ -85,7 +85,7 @@ class ThreadStore(abc.ABC):
 
 
 class InMemoryThreadStore(ThreadStore):
-    """Dict-backed store — ``vdreamer dev`` (D11) and the tests."""
+    """Dict-backed store — ``vdreamer dev`` and the tests."""
 
     def __init__(self) -> None:
         self._threads: dict[str, ThreadRecord] = {}
@@ -156,7 +156,7 @@ class InMemoryThreadStore(ThreadStore):
             return True
 
 
-#: The ``threads`` table (§2.5). Idempotent; ``vdreamer migrate`` applies it.
+#: The ``threads`` table. Idempotent; ``vdreamer migrate`` applies it.
 THREADS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS threads (
     id          text        PRIMARY KEY,

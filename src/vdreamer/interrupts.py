@@ -1,6 +1,6 @@
-"""The interrupt record (PRD §4.2) — the approver inbox behind ``/interrupts``.
+"""The interrupt record — the approver inbox behind ``/interrupts``.
 
-Every pending LangGraph interrupt of a run becomes one record (A44: one
+Every pending LangGraph interrupt of a run becomes one record (one
 record, one event, one endpoint, whatever raised it):
 
 ``interrupts(interrupt_id, run_id, kind, scope, approver_role, actions[],
@@ -9,7 +9,7 @@ resolved_by, resolution)``
 
 plus the columns the gateway needs to serve the inbox without a join:
 ``thread_id``, ``agent``, ``edit_schema``, ``initiator_id`` (authority defaults
-to the initiator, §4.3) and the timestamps.
+to the initiator) and the timestamps.
 
 Who writes what:
 
@@ -18,17 +18,17 @@ Who writes what:
   idempotent on ``interrupt_id`` — LangGraph's own interrupt id — because a
   recovered attempt re-raises the same interrupt;
 - the **gateway** resolves it (``POST /interrupts/{id}/resolve``) with a
-  compare-and-swap on ``version`` (A12: the first resolver wins, the second
+  compare-and-swap on ``version`` (the first resolver wins, the second
   gets ``409``), then plants the resume map on the run and requeues it.
 
-Milestone 8 adds the policy around the record:
+Around the record:
 
 - :func:`apply_interrupt_policy` — ``BaseAgent.interrupt_policies`` attach
   ``approver_role`` / ``scope`` / TTL to interrupts raised outside
-  ``require_approval`` (§4.5); the worker applies it before the record and the
+  ``require_approval``; the worker applies it before the record and the
   event exist, so both carry the same policy;
-- :func:`is_strict_scope` — four-eyes (``HITL_STRICT_SCOPES``, A32);
-- :class:`InterruptSweeper` — the leader-elected expiry sweeper (§4.4): an
+- :func:`is_strict_scope` — four-eyes (``HITL_STRICT_SCOPES``);
+- :class:`InterruptSweeper` — the leader-elected expiry sweeper: an
   overdue interrupt → ``expired``, its run → ``expired`` (the thread unlocks);
 - :func:`end_waiting_run` — how a run no worker holds is ended (headless
   ``reject → rejected`` by the gateway, expiry by the sweeper).
@@ -66,7 +66,7 @@ _log = logging.getLogger(__name__)
 
 
 class InterruptStatus(enum.StrEnum):
-    """The §4.2 record statuses."""
+    """The record statuses."""
 
     PENDING = "pending"
     RESOLVED = "resolved"
@@ -76,7 +76,7 @@ class InterruptStatus(enum.StrEnum):
 
 @dataclass(frozen=True)
 class InterruptRecord:
-    """One ``interrupts`` row (§4.2). Timestamps are epoch seconds (wall clock)."""
+    """One ``interrupts`` row. Timestamps are epoch seconds (wall clock)."""
 
     interrupt_id: str
     run_id: str
@@ -98,12 +98,12 @@ class InterruptRecord:
     resolved_at: float | None = None
 
     def is_expired(self, now: float) -> bool:
-        """Past ``expires_at`` — resolvable no more, whatever the sweeper has done (§4.4)."""
+        """Past ``expires_at`` — resolvable no more, whatever the sweeper has done."""
         return self.expires_at is not None and now >= self.expires_at
 
 
 class InterruptConflict(Exception):
-    """The compare-and-swap lost: stale ``expected_version`` or no longer pending (A12)."""
+    """The compare-and-swap lost: stale ``expected_version`` or no longer pending."""
 
     def __init__(self, interrupt_id: str) -> None:
         super().__init__(f"interrupt {interrupt_id!r} changed under the resolver")
@@ -125,10 +125,10 @@ def record_from_event(
     initiator_id: str | None,
     now: float | None = None,
 ) -> InterruptRecord:
-    """The record for one ``interrupt.requested`` envelope (§4.2).
+    """The record for one ``interrupt.requested`` envelope.
 
     The payload is the driver's normalized ``InterruptRequestedPayload``
-    (``streaming.normalize_interrupt``, A44), so every source maps the same.
+    (``streaming.normalize_interrupt``), so every source maps the same.
     """
     if envelope.type is not EventType.INTERRUPT_REQUESTED:
         raise ValueError(f"not an interrupt.requested envelope: {envelope.type}")
@@ -156,14 +156,14 @@ def record_from_event(
 
 @dataclass(frozen=True)
 class Viewer:
-    """Who is looking at the inbox: the caller's id and roles (D13)."""
+    """Who is looking at the inbox: the caller's id and roles."""
 
     user_id: str
     roles: tuple[str, ...] = ()
 
 
 def visible_to(record: InterruptRecord, viewer: Viewer) -> bool:
-    """§4.3 visibility: the approver role's holders, plus the run's initiator.
+    """Who sees an interrupt: the approver role's holders, plus the run's initiator.
 
     (Authority to *resolve* is narrower: with an ``approver_role`` set, the
     initiator may look but not resolve — the gateway's check.)
@@ -180,7 +180,7 @@ EXPIRY_BATCH: Final[int] = 100
 
 
 class InterruptStore(abc.ABC):
-    """The §4.2 records: created by workers, resolved by the gateway."""
+    """The records: created by workers, resolved by the gateway."""
 
     @abc.abstractmethod
     async def create(self, record: InterruptRecord) -> InterruptRecord:
@@ -218,7 +218,7 @@ class InterruptStore(abc.ABC):
         """``pending → resolved`` iff ``version == expected_version``; bumps ``version``.
 
         Raises:
-            InterruptConflict: unknown, not pending, or a stale version (A12).
+            InterruptConflict: unknown, not pending, or a stale version.
         """
 
     @abc.abstractmethod
@@ -229,7 +229,7 @@ class InterruptStore(abc.ABC):
     async def expire_overdue(
         self, now: float | None = None, *, limit: int = EXPIRY_BATCH
     ) -> builtins.list[InterruptRecord]:
-        """``pending → expired`` for up to ``limit`` records past ``expires_at`` (§4.4).
+        """``pending → expired`` for up to ``limit`` records past ``expires_at``.
 
         Bumps ``version`` (a resolver holding the old one gets ``409``/``410``)
         and returns the expired records, oldest deadline first.
@@ -237,7 +237,7 @@ class InterruptStore(abc.ABC):
 
 
 class InMemoryInterruptStore(InterruptStore):
-    """Dict-backed store — ``vdreamer dev`` (D11) and the tests."""
+    """Dict-backed store — ``vdreamer dev`` and the tests."""
 
     def __init__(self) -> None:
         self._records: dict[str, InterruptRecord] = {}
@@ -337,7 +337,7 @@ class InMemoryInterruptStore(InterruptStore):
             return expired
 
 
-#: The ``interrupts`` table (§4.2). Idempotent; ``vdreamer migrate`` applies it.
+#: The ``interrupts`` table. Idempotent; ``vdreamer migrate`` applies it.
 INTERRUPTS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS interrupts (
     interrupt_id  text        PRIMARY KEY,
@@ -401,7 +401,7 @@ ORDER BY created_at, interrupt_id
 LIMIT %s
 """
 
-#: The compare-and-swap (A12): one UPDATE guarded by status *and* version.
+#: The compare-and-swap: one UPDATE guarded by status *and* version.
 _RESOLVE_SQL: Final[str] = f"""
 UPDATE interrupts
 SET status = 'resolved',
@@ -419,7 +419,7 @@ SET status = 'cancelled', version = version + 1
 WHERE run_id = %s AND status = 'pending'
 """
 
-#: §4.4: one batch of overdue interrupts → ``expired``. ``SKIP LOCKED`` leaves a
+#: One batch of overdue interrupts → ``expired``. ``SKIP LOCKED`` leaves a
 #: row a resolver is updating to that resolver's compare-and-swap.
 _EXPIRE_OVERDUE_SQL: Final[str] = f"""
 UPDATE interrupts
@@ -567,10 +567,10 @@ class PostgresInterruptStore(InterruptStore):
 
 
 # ---------------------------------------------------------------------------
-# Policy: interrupt_policies (§4.5) and four-eyes (A32)
+# Policy: interrupt_policies and four-eyes
 # ---------------------------------------------------------------------------
 
-#: The §4.5 kinds raised outside ``require_approval`` — what ``interrupt_policies`` cover.
+#: The kinds raised outside ``require_approval`` — what ``interrupt_policies`` cover.
 TOOL_REVIEW_KIND: Final[str] = "tool_review"
 MCP_ELICITATION_KIND: Final[str] = "mcp_elicitation"
 GENERIC_KIND: Final[str] = "generic"
@@ -617,7 +617,7 @@ def apply_interrupt_policy(
     *,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Attach ``interrupt_policies`` to one ``interrupt.requested`` payload (§4.5).
+    """Attach ``interrupt_policies`` to one ``interrupt.requested`` payload.
 
     Only the sources outside ``require_approval`` (:data:`POLICY_KINDS`) take
     a policy — ``require_approval`` declares its own. A tool-name key beats the
@@ -645,14 +645,14 @@ def apply_interrupt_policy(
 
 
 def is_strict_scope(scope: str | None, strict_scopes: Sequence[str]) -> bool:
-    """A32: ``scope`` matches a ``HITL_STRICT_SCOPES`` pattern (``fnmatch``) → four-eyes."""
+    """True when ``scope`` matches a ``HITL_STRICT_SCOPES`` pattern (four-eyes)."""
     return scope is not None and any(
         fnmatch.fnmatchcase(scope, pattern) for pattern in strict_scopes
     )
 
 
 # ---------------------------------------------------------------------------
-# Ending a run no worker holds; the expiry sweeper (§4.3, §4.4)
+# Ending a run no worker holds; the expiry sweeper
 # ---------------------------------------------------------------------------
 
 
@@ -667,7 +667,7 @@ async def end_waiting_run(
 ) -> bool:
     """Move an ``awaiting_approval`` run to a terminal ``status`` and log it.
 
-    No worker holds a waiting run (approvals free the worker, §3.2), so
+    No worker holds a waiting run (approvals free the worker), so
     whoever ends it — the gateway on a headless ``reject``, the sweeper on
     expiry — writes its final ``run.status``; its other pending interrupts are
     ``cancelled``. ``False`` when the run already left ``awaiting_approval``
@@ -694,7 +694,7 @@ async def end_waiting_run(
 
 
 class Leader(Protocol):
-    """Leader election for the sweeper: only the leader sweeps (§4.4)."""
+    """Leader election for the sweeper: only the leader sweeps."""
 
     async def is_leader(self) -> bool:
         """Try to hold leadership; ``True`` while this process holds it."""
@@ -706,7 +706,7 @@ class Leader(Protocol):
 
 
 class SingleProcessLeader:
-    """Always the leader — ``vdreamer dev`` and the tests run one gateway (D11)."""
+    """Always the leader — ``vdreamer dev`` and the tests run one gateway."""
 
     async def is_leader(self) -> bool:
         return True
@@ -771,7 +771,7 @@ INTERRUPT_EXPIRED_CODE: Final[str] = "interrupt_expired"
 
 
 class InterruptSweeper:
-    """The leader-elected expiry sweeper (§4.4).
+    """The leader-elected expiry sweeper.
 
     Each sweep (leader only): overdue ``pending`` interrupts → ``expired``;
     each one's run, still ``awaiting_approval``, → ``expired`` with a final
@@ -823,7 +823,7 @@ class InterruptSweeper:
                 ),
             )
             if ended:
-                _log.info("run %s expired: its interrupt lapsed (§4.4)", run_id)
+                _log.info("run %s expired: its interrupt lapsed", run_id)
         return expired
 
     async def run(self, stop: asyncio.Event) -> None:

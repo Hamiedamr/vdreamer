@@ -1,7 +1,7 @@
-"""Inbound files: ``ctx.files.open(ref)`` and ``ctx.files.safe_extract`` (PRD §3.5, A17, A34).
+"""Inbound files: ``ctx.files.open(ref)`` and ``ctx.files.safe_extract``.
 
 Upstream systems upload to the object store under ``inputs/`` and pass a
-``FileRef`` in the run's input (the gateway refuses any other prefix, A17).
+``FileRef`` in the run's input (the gateway refuses any other prefix).
 Agents read through ``ctx.files``:
 
 - ``open(ref)`` → a binary file object (``aopen`` / ``read_bytes`` /
@@ -44,7 +44,7 @@ EXTRACT_TIMEOUT_S: Final = 300.0
 
 
 class ManifestEntry(pydantic.BaseModel):
-    """One extracted file (§3.5): its archive path and where its bytes now live."""
+    """One extracted file: its archive path and where its bytes now live."""
 
     path: str
     object_key: str
@@ -161,7 +161,7 @@ class Files:
         limits: ExtractLimits | None = None,
         timeout_s: float = EXTRACT_TIMEOUT_S,
     ) -> Manifest:
-        """Unpack the ZIP ``ref`` in the sandbox (A34); see the module docstring.
+        """Unpack the ZIP ``ref`` in the sandbox; see the module docstring.
 
         ``allow`` holds filename globs (``"*.jpg"``) and mime patterns
         (``"image/*"``); ``None`` keeps every type.

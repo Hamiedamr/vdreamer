@@ -86,7 +86,7 @@ def test_headless_approval_gates_need_an_approver_role() -> None:
             return _graph(ctx.tools.govern([risky]))
 
     ok, detail = _check(Headless(), "approval.routes")
-    assert not ok and "risky" in detail and "A16" in detail
+    assert not ok and "risky" in detail and "approver_role" in detail
 
     class Chat(Headless):
         name = "chat"

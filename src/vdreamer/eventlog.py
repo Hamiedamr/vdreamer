@@ -1,21 +1,21 @@
-"""Event sinks, the ``run_events`` log, and its live fan-out (PRD §3.3, A3, A7).
+"""Event sinks, the ``run_events`` log, and its live fan-out.
 
-Milestone 2 (WP1) landed the write side: the sink abstraction
-(``EventSink``), the in-memory collector (``InMemoryEventSink``), the per-run
-``seq`` allocator, and the Postgres writer (``PostgresEventLog``) that persists
-envelopes to ``run_events(run_id, seq, type, ns, payload jsonb, ts)`` with PK
-``(run_id, seq)`` (A3).
+The write side: the sink abstraction (``EventSink``), the in-memory collector
+(``InMemoryEventSink``), the per-run ``seq`` allocator, and the Postgres
+writer (``PostgresEventLog``) that persists envelopes to
+``run_events(run_id, seq, type, ns, payload jsonb, ts)`` with PK
+``(run_id, seq)``.
 
-Milestone 4 adds the read side the gateway's SSE transport needs (§2.5:
-"replay ``seq > N``, then tail live; any replica serves any reconnect"):
+The read side the gateway's SSE transport needs ("replay ``seq > N``, then
+tail live; any replica serves any reconnect"):
 
 - :class:`EventReader` — ``read(run_id, after_seq)`` for ``Last-Event-ID``
   replay; :class:`PostgresEventStore` (short-lived connections, any gateway
-  replica) and :class:`InMemoryEventLog` (``vdreamer dev``, D11, and tests —
-  one shared log that is sink *and* reader) implement it.
+  replica) and :class:`InMemoryEventLog` (``vdreamer dev`` and tests — one
+  shared log that is sink *and* reader) implement it.
 - :class:`EventHub` — per-run wake-ups for live tailing. Writers notify it
   directly in-process; across processes ``PostgresEventLog.write`` issues
-  ``NOTIFY vdreamer_events, '{run_id, seq}'`` in the insert's transaction (A7)
+  ``NOTIFY vdreamer_events, '{run_id, seq}'`` in the insert's transaction
   and :class:`PostgresEventListener` feeds the hub from ``LISTEN``. A wake-up
   only means "re-read": the log stays the source of truth, so a lost
   notification costs latency (the SSE loop re-reads on every heartbeat), never
@@ -40,7 +40,7 @@ from vdreamer.persistence import MissingPostgresDependencyError
 
 _log = logging.getLogger(__name__)
 
-#: The ``run_events`` table (PRD §3.3, A3): exact columns
+#: The ``run_events`` table: exact columns
 #: ``run_events(run_id, seq, type, ns, payload jsonb, ts)``, PK ``(run_id, seq)``.
 #: Idempotent — ``migrate`` reuses this constant.
 RUN_EVENTS_DDL: Final[str] = """
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS run_events (
 
 #: One insert + per-run seq allocation in a single statement: the CTE reads
 #: the run's ``MAX(seq) + 1`` and the INSERT consumes it atomically, so the
-#: allocated ``seq`` and the row land in the same transaction (PRD §3.3).
+#: allocated ``seq`` and the row land in the same transaction.
 #: ``ns`` and ``payload`` travel as JSON text cast to ``jsonb`` — psycopg
 #: cannot adapt a ``dict`` without a wrapper and would send a ``list`` as a
 #: Postgres array.
@@ -80,14 +80,14 @@ FROM next_seq
 RETURNING seq
 """
 
-#: The ``LISTEN``/``NOTIFY`` channel of the live fan-out (A7): the payload is
+#: The ``LISTEN``/``NOTIFY`` channel of the live fan-out: the payload is
 #: ``{"run_id": …, "seq": …}``, sent in the insert's transaction so it is
 #: delivered exactly when the row becomes visible.
 EVENTS_NOTIFY_CHANNEL: Final[str] = "vdreamer_events"
 
 _NOTIFY_SQL: Final[str] = "SELECT pg_notify(%s, %s)"
 
-#: Replay read for ``Last-Event-ID`` (§2.5): ``seq > N`` in order.
+#: Replay read for ``Last-Event-ID``: ``seq > N`` in order.
 RUN_EVENTS_READ_SQL: Final[str] = """
 SELECT run_id, seq, type, ns, payload, ts
 FROM run_events
@@ -117,7 +117,7 @@ def json_text(value: Any) -> str:
 
 
 class EventSink(abc.ABC):
-    """Where the stream drivers write enveloped events (PRD §3.3).
+    """Where the stream drivers write enveloped events.
 
     One sink per run; ``write`` must be safe to call from any await point of
     the run's driver. ``close`` releases resources and defaults to no-op —
@@ -134,7 +134,7 @@ class EventSink(abc.ABC):
 
 
 class EventReader(abc.ABC):
-    """The read side of the event log: ``Last-Event-ID`` replay (§2.5, A3)."""
+    """The read side of the event log: ``Last-Event-ID`` replay."""
 
     @abc.abstractmethod
     async def read(
@@ -149,13 +149,13 @@ class EventReader(abc.ABC):
         """The run's envelopes with ``seq > after_seq``, in ``seq`` order.
 
         ``agent`` / ``thread_id`` fill the envelope fields a backend does not
-        store (``run_events`` keeps A3's exact columns only); backends that
+        store (``run_events`` keeps exact columns only); backends that
         keep whole envelopes ignore them.
         """
 
 
 class InMemoryEventSink(EventSink):
-    """A thread-free async list collector — for tests and ``vdreamer dev`` (D11).
+    """A thread-free async list collector — for tests and ``vdreamer dev``.
 
     ``write`` never blocks; ``events`` snapshots what landed, in write order.
     """
@@ -175,7 +175,7 @@ class InMemoryEventSink(EventSink):
 class SeqCounter:
     """Per-run ``seq`` allocation: monotonically increasing ints from 1.
 
-    PRD §3.3: ``seq`` is per-``run_id`` (the PK is ``(run_id, seq)``), so each
+    ``seq`` is per-``run_id`` (the PK is ``(run_id, seq)``), so each
     run counts from 1 independently. This is the in-process allocator the
     in-memory/dev path and the envelope builders use; the Postgres log
     allocates its own ``seq`` from the table (see ``PostgresEventLog.write``).
@@ -221,7 +221,7 @@ class EventSubscription:
 
 
 class EventHub:
-    """Per-run wake-ups for live tailing (§2.5), one per gateway process.
+    """Per-run wake-ups for live tailing, one per gateway process.
 
     Subscribe *before* the first replay read: a write landing between the
     read and the subscribe would otherwise be noticed only at the next
@@ -263,7 +263,7 @@ class EventHub:
 
 
 class InMemoryEventLog(EventSink, EventReader):
-    """One shared in-process log: every run's sink, reader, and fan-out (D11).
+    """One shared in-process log: every run's sink, reader, and fan-out.
 
     The ``vdreamer dev`` topology and the gateway tests use one instance for
     everything: the worker writes through it (``close`` is a no-op, so the
@@ -324,13 +324,13 @@ def _load_async_connection_class() -> Any:
 
 
 class PostgresEventLog(EventSink):
-    """Persists envelopes to ``run_events`` (PRD §3.3, A3) and announces them (A7).
+    """Persists envelopes to ``run_events`` and announces them.
 
     ``seq`` is *not* the caller's to guess: ``write`` allocates it from the
     run's ``MAX(seq) + 1`` inside the same transaction as the INSERT (see
     ``RUN_EVENTS_INSERT_SQL``) and writes the allocated value back onto the
     envelope, so the caller can use ``envelope.sse_id`` and
-    ``Last-Event-ID`` replay (§2.5) right after ``await write``. The same
+    ``Last-Event-ID`` replay right after ``await write``. The same
     transaction issues ``NOTIFY vdreamer_events, '{run_id, seq}'``, which
     Postgres delivers on commit — the gateway's
     :class:`PostgresEventListener` turns it into a live wake-up.
@@ -351,7 +351,7 @@ class PostgresEventLog(EventSink):
 
         ``autocommit`` is on: each statement commits on its own and explicit
         ``transaction()`` blocks (``write``) still get real transactions.
-        The DSN comes from the environment, never YAML (A23).
+        The DSN comes from the environment, never YAML.
         """
         conn_cls = _load_async_connection_class()
         conn = await conn_cls.connect(dsn, autocommit=True)
@@ -428,11 +428,11 @@ def _row_to_envelope(row: Any, agent: str = "", thread_id: str = "") -> EventEnv
 class PostgresEventStore(EventSink, EventReader):
     """The gateway's handle on ``run_events``: replay reads plus occasional writes.
 
-    Stateless like the gateway (§2.1): every call opens a short-lived
+    Stateless like the gateway: every call opens a short-lived
     autocommit connection, so any replica serves any reconnect. ``run_events``
-    stores neither ``thread_id`` nor ``agent`` (A3's exact columns); the
+    stores neither ``thread_id`` nor ``agent`` (exact columns); the
     caller passes them to :meth:`read` from the run row so replayed envelopes
-    carry the full §3.3 envelope.
+    carry the full envelope.
     """
 
     def __init__(self, dsn: str) -> None:
@@ -465,7 +465,7 @@ class PostgresEventStore(EventSink, EventReader):
 
 
 class PostgresEventListener:
-    """``LISTEN vdreamer_events`` → :class:`EventHub` wake-ups (A7), one per gateway.
+    """``LISTEN vdreamer_events`` → :class:`EventHub` wake-ups, one per gateway.
 
     Holds one dedicated connection in a background task. On any failure it
     logs, wakes every subscriber (they re-read, so nothing written during the

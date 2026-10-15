@@ -495,6 +495,10 @@ A new-developer pass over the README, `vdreamer dev`/`run`, the REST/SSE surface
 
 Exit: `uv run pytest` — 978 passed, 28 skipped (including `tests/acceptance/test_playground.py`, 7 tests); ruff + mypy (strict) clean; the playground's model-backed agents also run live against Ollama `gemma4:31b-cloud`.
 
+- [x] **Spec references leaked to users.** Swagger/OpenAPI (129), the event schema (28), the generated TypeScript types (41) and `--help` (25) carried PRD section numbers and assumption/decision ids from docstrings. The shipped package and the user docs (`operations.md`, `protocol.md`, example READMEs) no longer reference the spec; milestone-history module docstrings were rewritten as present-tense descriptions. This file, `PRD.md`, `AGENTS.md` and `CONTRIBUTING.md` keep the ids for contributors.
+- [x] **The token had to be set in the shell.** Every command now reads `.env` from the working directory (or `--env-file PATH`, before or after the command name): `vdreamer/dotenv.py`, no new dependency. Variables already set win, the zero-egress switches are forced afterwards, and only the loaded names (never values) are printed.
+- [x] **0.1.1:** the above plus Python 3.12 in CI (`locked` runs on 3.11 and 3.12) and the classifier.
+
 Not changed, by design: `output_version="v1"` (§2.4) — the playground reads `msg.text`; Ollama `-cloud` models ignoring `format` (an Ollama limitation — the router uses `method="function_calling"`).
 
 ---

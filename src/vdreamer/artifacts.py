@@ -1,6 +1,6 @@
-"""Artifacts: the SDK helpers, the write order, and the stores (PRD §3.4, D6–D8, A8, A9).
+"""Artifacts: the SDK helpers, the write order, and the stores.
 
-Agent code produces artifacts two ways (§3.4):
+Agent code produces artifacts two ways:
 
 - ``emit_artifact(name, kind, data, metadata?, renderer?) -> ArtifactRef`` from
   any node or tool (``aemit_artifact`` is the awaitable twin for async code);
@@ -8,7 +8,7 @@ Agent code produces artifacts two ways (§3.4):
   pipeline stores it and the model gets a short reference instead.
 
 Each kind accepts specific data (``vdreamer.artifact_data``; no
-auto-detection — anything else is a ``TypeError``). The write order is D7:
+auto-detection — anything else is a ``TypeError``). The write order:
 bytes to the object store at ``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}``,
 *then* the metadata row, *then* the ``artifact.created`` record into the
 run's stream — so an event never names an artifact the gateway cannot serve.
@@ -21,13 +21,13 @@ Stores pair a metadata table with an :class:`~vdreamer.objects.ObjectStore`:
 
 - :class:`InMemoryArtifactStore` — tests;
 - ``sqlite_state.SqliteArtifactStore`` — ``vdreamer dev``: rows in the dev
-  ``.db``, bytes on the local filesystem next to it (D11);
+  ``.db``, bytes on the local filesystem next to it;
 - :class:`PostgresArtifactStore` — ``serve``/``worker``: the ``artifacts``
   table plus MinIO;
 - :class:`UnavailableArtifactStore` — ``serve``/``worker`` with no MinIO
   configured: every lookup misses (``404``), every write fails loudly.
 
-A record whose object is gone (the 30-day lifecycle, A9) reads back with
+A record whose object is gone (the 30-day lifecycle) reads back with
 ``read_bytes`` → ``None``; the gateway answers ``410 artifact_expired``.
 """
 
@@ -65,7 +65,7 @@ API_PREFIX: Final[str] = "/api/v1"
 
 
 def artifact_urls(artifact_id: str) -> tuple[str, str]:
-    """``(view_url, download_url)`` — the gateway routes (§3.4)."""
+    """``(view_url, download_url)`` — the gateway routes."""
     return (
         f"{API_PREFIX}/artifacts/{artifact_id}/raw",
         f"{API_PREFIX}/artifacts/{artifact_id}/download",
@@ -73,7 +73,7 @@ def artifact_urls(artifact_id: str) -> tuple[str, str]:
 
 
 class ArtifactKind(enum.StrEnum):
-    """The five artifact kinds (PRD §3.4)."""
+    """The five artifact kinds."""
 
     TABLE = "table"
     IMAGE = "image"
@@ -94,7 +94,7 @@ class ArtifactRef(pydantic.BaseModel):
 
 @dataclass
 class Artifact(ToolOutputMixin):
-    """A governed tool's artifact return value (§3.4: ``return Artifact(...)``).
+    """A governed tool's artifact return value (``return Artifact(...)``).
 
     Returning one (or a list of them) from a tool stores it like
     ``emit_artifact`` and hands the model a short reference naming the
@@ -113,10 +113,10 @@ class Artifact(ToolOutputMixin):
 
 @dataclass(frozen=True)
 class ArtifactRecord:
-    """One artifact's metadata (§3.4 ``artifact.created`` fields, minus the URLs).
+    """One artifact's metadata (``artifact.created`` fields, minus the URLs).
 
     ``question_id`` / ``session_id`` in the event are ``run_id`` /
-    ``thread_id`` here (§3.1). ``preview`` is the per-kind SSE preview block;
+    ``thread_id`` here. ``preview`` is the per-kind SSE preview block;
     ``view_url`` / ``download_url`` are derived by the gateway, never stored.
     ``object_key`` is where the bytes live; empty on rows written before it
     was recorded, which derive it from the mime type (:func:`key_of`).
@@ -138,7 +138,7 @@ class ArtifactRecord:
 
 
 def object_key_for(thread_id: str, run_id: str, artifact_id: str, ext: str) -> str:
-    """``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}`` (§3.4, D7)."""
+    """``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}``."""
     for part in (thread_id, run_id, artifact_id):
         if "/" in part or part in ("", ".", ".."):
             raise ValueError(f"unsafe artifact key segment {part!r}")
@@ -146,7 +146,7 @@ def object_key_for(thread_id: str, run_id: str, artifact_id: str, ext: str) -> s
 
 
 def key_of(record: ArtifactRecord) -> str:
-    """The record's object key (derived from the mime type on pre-M6 rows)."""
+    """The record's object key (derived from the mime type on older rows)."""
     if record.object_key:
         return record.object_key
     from vdreamer.artifact_data import extension_for
@@ -156,7 +156,7 @@ def key_of(record: ArtifactRecord) -> str:
 
 
 class ArtifactStore(abc.ABC):
-    """Metadata rows + an object store for the bytes (A8: gateway-proxied reads)."""
+    """Metadata rows + an object store for the bytes (gateway-proxied reads)."""
 
     objects: ObjectStore
 
@@ -166,10 +166,10 @@ class ArtifactStore(abc.ABC):
 
     @abc.abstractmethod
     async def insert(self, record: ArtifactRecord) -> None:
-        """Write the metadata row (after the bytes, D7)."""
+        """Write the metadata row (after the bytes)."""
 
     async def put(self, record: ArtifactRecord, data: bytes | None) -> None:
-        """Store the bytes, then the row (D7); ``data=None`` models an expired object."""
+        """Store the bytes, then the row; ``data=None`` models an expired object."""
         key = key_of(record)
         if data is None:
             await self.objects.adelete(key)
@@ -178,12 +178,12 @@ class ArtifactStore(abc.ABC):
         await self.insert(record)
 
     async def put_file(self, record: ArtifactRecord, path: str | Path) -> None:
-        """Store the file at ``path`` as the bytes, then the row (D7)."""
+        """Store the file at ``path`` as the bytes, then the row."""
         await self.objects.aput_file(key_of(record), path, record.mime_type)
         await self.insert(record)
 
     async def read_bytes(self, record: ArtifactRecord) -> bytes | None:
-        """The artifact's bytes, or ``None`` when the object is gone (A9 → ``410``)."""
+        """The artifact's bytes, or ``None`` when the object is gone (past retention → ``410``)."""
         return await self.objects.aget_bytes(key_of(record))
 
     async def fetch(self, record: ArtifactRecord, dest: str | Path) -> bool:
@@ -243,7 +243,7 @@ class UnavailableArtifactStore(ArtifactStore):
         await self.insert(record)
 
 
-#: The ``artifacts`` table (§3.4). Idempotent; ``vdreamer migrate`` applies it.
+#: The ``artifacts`` table. Idempotent; ``vdreamer migrate`` applies it.
 ARTIFACTS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS artifacts (
     id          text        PRIMARY KEY,
@@ -468,7 +468,7 @@ def _new_record(
 
 
 async def _store(record: ArtifactRecord, data: bytes | None, path: Path | None) -> bool:
-    """D7 steps 1–2 through the bound store; ``False`` when none is bound."""
+    """Write steps 1–2 (bytes, then row) through the bound store; ``False`` when none is bound."""
     store = current_artifact_store()
     if store is None:
         return False
@@ -493,7 +493,7 @@ async def write_artifact(
     """Persist pre-encoded bytes for the current run and announce them; returns the id.
 
     The internal path (the governed tool pipeline's overflow artifacts);
-    agent code uses :func:`emit_artifact`. D7 order, like every write.
+    agent code uses :func:`emit_artifact`. order, like every write.
     """
     from vdreamer.artifact_data import extension_for
     from vdreamer.context import emit_record
@@ -566,7 +566,7 @@ def _encode(
 
 
 async def _persist(record: ArtifactRecord, encoded: Any) -> bool:
-    """D7 steps 1–2, then drop the spooled file."""
+    """Write steps 1–2 (bytes, then row), then drop the spooled file."""
     try:
         return await _store(record, encoded.data, encoded.path)
     finally:
@@ -606,13 +606,13 @@ def emit_artifact(
     mime_type: str | None = None,
     filename: str | None = None,
 ) -> ArtifactRef:
-    """Store an artifact for the current run and announce it (PRD §3.4).
+    """Store an artifact for the current run and announce it.
 
     ``kind`` must be an :class:`ArtifactKind` member and ``data`` what that
     kind accepts (see ``vdreamer.artifact_data``) — anything else is a
     ``TypeError``, never auto-detected. ``renderer`` is an optional UI hint
     (e.g. ``verdict.v1``); ``mime_type``/``filename`` describe ``file``
-    artifacts. The write follows D7 (bytes → metadata row → event) and the
+    artifacts. The write order is bytes → metadata row → event and the
     returned :class:`ArtifactRef` is what agent code hands to the model or
     keeps in state.
 

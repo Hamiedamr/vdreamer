@@ -1,10 +1,10 @@
-"""``models.yaml`` resolution (PRD §3.6, D17, A21, A23, A36).
+"""``models.yaml`` resolution.
 
 Agents name model *aliases* (``BaseAgent.models = ["reasoner", "dense"]``);
 ``models.yaml`` maps each alias to a backend:
 
 - ``provider: vllm`` / ``provider: ollama``: a LangChain chat model built
-  with ``output_version="v1"`` (§2.4): :class:`VllmChatModel` (a
+  with ``output_version="v1"``: :class:`VllmChatModel` (a
   ``ChatOpenAI`` against vLLM's OpenAI-compatible API, Chat Completions only)
   or :class:`OllamaChatModel` (a ``ChatOllama``). Each alias picks a
   ``thinking`` mode, and the model turns it into standard ``reasoning``
@@ -12,7 +12,7 @@ Agents name model *aliases* (``BaseAgent.models = ["reasoner", "dense"]``);
   conversation history see one shape:
 
   - ``reasoning_content``: the server separates reasoning (vLLM
-    ``--reasoning-parser``, A21: ``delta.reasoning_content``, or ``reasoning``
+    ``--reasoning-parser``: ``delta.reasoning_content``, or ``reasoning``
     on newer vLLM; Ollama's ``think``).
   - ``think_tags``: the model writes ``<think>…</think>`` at the start of its
     text; the tags are parsed out of the stream, even split across chunks.
@@ -21,13 +21,13 @@ Agents name model *aliases* (``BaseAgent.models = ["reasoner", "dense"]``);
 - ``provider: fastembed``: ``kind: embedding | sparse | rerank`` →
   ``TextEmbedding`` / ``SparseTextEmbedding`` / ``TextCrossEncoder``, loaded
   once per worker from the ``fastembed.cache_dir`` with
-  ``local_files_only=True`` and the configured ONNX providers (A36). These
+  ``local_files_only=True`` and the configured ONNX providers. These
   are the native objects, not wrapped.
 
-Secrets never appear in the file (A23): ``api_key_env`` names the
+Secrets never appear in the file: ``api_key_env`` names the
 environment variable. Endpoints must match ``NETWORK_ALLOWLIST`` when it is
-set (A40), at load and again when they are probed. Per-alias latency and
-token counts feed the ``vdreamer_model_*`` metrics (§5.4).
+set, at load and again when they are probed. Per-alias latency and
+token counts feed the ``vdreamer_model_*`` metrics.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ class FastembedModelConfig:
 
 @dataclass(frozen=True)
 class FastembedSettings:
-    """The top-level ``fastembed:`` block (A36)."""
+    """The top-level ``fastembed:`` block."""
 
     cache_dir: str
     providers: tuple[str, ...] = ("CPUExecutionProvider",)
@@ -158,7 +158,7 @@ def _check_secrets(alias: str, entry: Mapping[str, Any]) -> None:
     if inline:
         raise _fail(
             alias,
-            f"{', '.join(inline)} would put a secret in YAML (A23); reference an "
+            f"{', '.join(inline)} would put a secret in YAML; reference an "
             "environment variable with api_key_env instead",
         )
 
@@ -253,11 +253,11 @@ def _parse_fastembed_settings(value: Any, origin: str) -> FastembedSettings:
         raise ModelsError(f"{origin}: fastembed: unknown key(s) {unknown}")
     cache_dir = value.get("cache_dir")
     if not isinstance(cache_dir, str) or not cache_dir:
-        raise ModelsError(f"{origin}: fastembed needs a cache_dir (the vendored model cache, A36)")
+        raise ModelsError(f"{origin}: fastembed needs a cache_dir (the vendored model cache)")
     if value.get("local_files_only", True) is not True:
         raise ModelsError(
             f"{origin}: fastembed.local_files_only must be true: models load from the "
-            "vendored cache only, never the network (A36, §5.2)"
+            "vendored cache only, never the network"
         )
     providers = value.get("providers", ["CPUExecutionProvider"])
     if (
@@ -483,7 +483,7 @@ class _ThinkingMixin:
 
 
 class VllmChatModel(_ThinkingMixin, ChatOpenAI):
-    """``ChatOpenAI`` against vLLM, keeping its separate reasoning field (A21).
+    """``ChatOpenAI`` against vLLM, keeping its separate reasoning field.
 
     ``ChatOpenAI`` targets the official API and drops vLLM's
     ``reasoning_content`` (``reasoning`` on newer vLLM); with
@@ -548,7 +548,7 @@ class OllamaChatModel(_ThinkingMixin, ChatOllama):
 
 
 # ---------------------------------------------------------------------------
-# Metrics (§5.4: model latency/tokens per alias)
+# Metrics (model latency/tokens per alias)
 # ---------------------------------------------------------------------------
 
 
@@ -681,7 +681,7 @@ def build_chat_model(
 
 
 def _force_offline() -> None:
-    """§5.2: the HuggingFace stack never reaches the hub from a worker."""
+    """The HuggingFace stack never reaches the hub from a worker."""
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
@@ -709,7 +709,7 @@ def _fastembed_class(kind: str) -> Any:
 def load_fastembed(
     config: FastembedModelConfig, settings: FastembedSettings, *, lazy: bool = False
 ) -> Any:
-    """The native fastembed object, from the vendored cache only (A36).
+    """The native fastembed object, from the vendored cache only.
 
     ``lazy=True`` locates the files without loading the ONNX session — the
     "missing model files" check of ``validate``/``doctor``.
@@ -826,7 +826,7 @@ async def probe_model(
 class AliasMap(Mapping[str, Any]):
     """``ctx.models`` / ``ctx.resources``: the declared aliases only.
 
-    Agents reference aliases only (§3.6); looking up one the agent did not
+    Agents reference aliases only; looking up one the agent did not
     declare is a ``KeyError`` that says so.
     """
 

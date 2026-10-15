@@ -1,6 +1,6 @@
-"""Parquet table artifacts: writing, previews, paging, and export (PRD §3.4, A24).
+"""Parquet table artifacts: writing, previews, paging, and export.
 
-Table artifacts are stored as Parquet (A24), written incrementally in row
+Table artifacts are stored as Parquet, written incrementally in row
 groups so a large row iterator never has to fit in memory, and capped at
 :data:`TABLE_MAX_ROWS` (5M; ``VDREAMER_TABLE_MAX_ROWS`` overrides) — beyond
 it the table is truncated and ``metadata.truncated`` says so.
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Final
 
 TABLE_MAX_ROWS_ENV: Final = "VDREAMER_TABLE_MAX_ROWS"
-#: §3.4: tables beyond 5M rows are truncated (``metadata.truncated``).
+#: Tables beyond 5M rows are truncated (``metadata.truncated``).
 DEFAULT_TABLE_MAX_ROWS: Final = 5_000_000
 #: Rows per Parquet row group (and per streamed export batch).
 ROW_GROUP_ROWS: Final = 65_536
@@ -151,7 +151,7 @@ def _batches(data: Any, pa: Any) -> Iterator[Any]:
 
 
 def write_parquet(data: Any, dest: str | Path, *, max_rows: int | None = None) -> WrittenTable:
-    """Write ``data`` to ``dest`` as Parquet, row group by row group (§3.4)."""
+    """Write ``data`` to ``dest`` as Parquet, row group by row group."""
     pa = _pa()
     import pyarrow.parquet as pq
 

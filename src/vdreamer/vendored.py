@@ -1,10 +1,10 @@
-"""The vendored static assets and their integrity check (PRD §5.2, A13).
+"""The vendored static assets and their integrity check.
 
-No CDN, ever (§5.2): the gateway serves third-party browser assets from the
+No CDN, ever: the gateway serves third-party browser assets from the
 wheel itself, under ``/static/vendor/``. Each file is pinned here by sha256 —
 ``vdreamer doctor --offline`` fails when one is missing or modified, which is
 what "vendored assets are covered by the zero-egress checks" means in
-practice. Milestone 4 vendors Swagger UI; Milestone 6 adds the chart JS
+practice. vendors Swagger UI; adds the chart JS
 (plotly.js, at ``/static/vendor/plotly/plotly.min.js``).
 
 The same check asserts the gateway's own docs shell (``docs.html`` and

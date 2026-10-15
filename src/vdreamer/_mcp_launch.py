@@ -1,4 +1,4 @@
-"""Exec an MCP stdio server under rlimits with only its declared env (A40, POSIX).
+"""Exec an MCP stdio server under rlimits with only its declared env (POSIX).
 
 Run as a script by ``vdreamer.mcp`` (``python -I _mcp_launch.py ...``); it
 imports nothing from vdreamer. The MCP SDK merges a default environment

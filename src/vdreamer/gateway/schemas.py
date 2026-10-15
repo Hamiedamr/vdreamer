@@ -1,7 +1,7 @@
-"""Request and response bodies of the REST contract (PRD §2.5).
+"""Request and response bodies of the REST contract.
 
-These models are what OpenAPI 3.1 publishes (``/api/v1/openapi.json``,
-§6.1). Timestamps are UTC ISO-8601 strings; ids are opaque strings.
+These models are what OpenAPI 3.1 publishes (``/api/v1/openapi.json``).
+Timestamps are UTC ISO-8601 strings; ids are opaque strings.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class ErrorDetail(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """The one error body (§2.5): ``{error: {code, message, details?}}``."""
+    """The one error body: ``{error: {code, message, details?}}``."""
 
     error: ErrorDetail
 
@@ -73,7 +73,7 @@ class RunOut(BaseModel):
     agent: str
     status: str = Field(
         description="queued | running | awaiting_approval | completed | failed | rejected | "
-        "expired | cancelled (§3.2)"
+        "expired | cancelled"
     )
     attempt: int
     created_at: str
@@ -84,7 +84,7 @@ class ThreadDetail(ThreadOut):
     runs: list[RunOut]
     active_run_id: str | None = None
     values: Any = Field(
-        default=None, description="The thread's latest checkpointed state (§2.4), JSON-encoded."
+        default=None, description="The thread's latest checkpointed state, JSON-encoded."
     )
     checkpoint_id: str | None = None
 
@@ -106,7 +106,7 @@ class RunConfig(BaseModel):
 
 
 class RunCreate(BaseModel):
-    """``{input, config?}`` (§2.5)."""
+    """``{input, config?}``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -117,7 +117,7 @@ class RunCreate(BaseModel):
 
 
 class TriggerCreate(BaseModel):
-    """``{input, config?, thread_id?, callback?}`` for ``POST /agents/{name}/trigger`` (D15)."""
+    """``{input, config?, thread_id?, callback?}`` for ``POST /agents/{name}/trigger``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -133,7 +133,7 @@ class TriggerCreate(BaseModel):
         default=None,
         max_length=2048,
         description="URL notified when the run completes, fails or raises an interrupt; "
-        "its host must be on CALLBACK_ALLOWLIST (A26).",
+        "its host must be on CALLBACK_ALLOWLIST.",
     )
 
 
@@ -147,7 +147,7 @@ class RunCreated(BaseModel):
 
 
 class InterruptOut(BaseModel):
-    """The §4.2 record."""
+    """The record."""
 
     interrupt_id: str
     run_id: str
@@ -160,7 +160,7 @@ class InterruptOut(BaseModel):
     payload: dict[str, Any]
     edit_schema: dict[str, Any] | None = None
     status: str = Field(description="pending | resolved | expired | cancelled")
-    version: int = Field(description="Send back as expected_version when resolving (A12).")
+    version: int = Field(description="Send back as expected_version when resolving.")
     expires_at: str | None = None
     created_at: str
     resolved_by: str | None = None
@@ -183,7 +183,7 @@ class ResolveRequest(BaseModel):
     """``{action, payload?, text?, expected_version}`` or ``{decisions, expected_version}``.
 
     The second form serves multi-action interrupts, one decision per action in
-    order (§4.3).
+    order.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -192,7 +192,7 @@ class ResolveRequest(BaseModel):
     payload: dict[str, Any] | None = None
     text: str | None = None
     decisions: list[Decision] | None = None
-    expected_version: int = Field(description="The record's version you resolved against (A12).")
+    expected_version: int = Field(description="The record's version you resolved against.")
 
     @pydantic.model_validator(mode="after")
     def _one_form(self) -> ResolveRequest:
@@ -209,11 +209,11 @@ class ResolveRequest(BaseModel):
 
 
 class ArtifactOut(BaseModel):
-    """The ``artifact.created`` field set (§3.4)."""
+    """The ``artifact.created`` field set."""
 
     artifact_id: str
-    question_id: str = Field(description="The run id (§3.1).")
-    session_id: str = Field(description="The thread id (§3.1).")
+    question_id: str = Field(description="The run id.")
+    session_id: str = Field(description="The thread id.")
     kind: str = Field(description="table | image | html | json | file")
     renderer: str | None = None
     name: str
@@ -226,7 +226,7 @@ class ArtifactOut(BaseModel):
 
 
 class ArtifactPreview(BaseModel):
-    """The stored preview; for tables also one page of rows (§3.4 ``/preview``)."""
+    """The stored preview; for tables also one page of rows (``/preview``)."""
 
     artifact_id: str
     kind: str

@@ -69,7 +69,10 @@ def test_require_approval_refuses_a_bad_policy(kwargs: dict[str, Any], message: 
 
 
 def test_headless_require_approval_needs_an_approver_role() -> None:
-    with bind_context(_ctx(headless=True)), pytest.raises(ValueError, match="A16"):
+    with (
+        bind_context(_ctx(headless=True)),
+        pytest.raises(ValueError, match="needs an approver_role"),
+    ):
         require_approval("verdict", {})
 
 

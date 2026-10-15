@@ -1,24 +1,24 @@
-"""The approver inbox and the one resolve endpoint (PRD §4.2, §4.3, A12, A44).
+"""The approver inbox and the one resolve endpoint.
 
-Authority (§4.3): the run's initiator resolves by default; an
+Authority: the run's initiator resolves by default; an
 ``approver_role`` on the interrupt replaces that with "any holder of the
 role". A caller who can neither resolve nor initiated the run does not see the
 record at all (``404``); the initiator of a role-gated interrupt sees it but
 gets ``403 forbidden_role`` on resolve.
 
 Resolution, in order: visibility (``404``) → authority (``403``: the role,
-else the initiator; four-eyes under a ``HITL_STRICT_SCOPES`` scope, A32) →
+else the initiator; four-eyes under a ``HITL_STRICT_SCOPES`` scope) →
 expiry (``410``, lazily — even before the sweeper marks it) → still pending
-and ``expected_version`` current (``409``; A12, the first resolver wins) → the
+and ``expected_version`` current (``409``; the first resolver wins) → the
 body against the record (``422``: offered actions, ``edit`` payloads against
 ``edit_schema``) → the compare-and-swap → ``interrupt.resolved`` → then either
 
-- a headless ``reject`` of an approval ends the run ``rejected`` (§4.3), or
+- a headless ``reject`` of an approval ends the run ``rejected``, or
 - once the run has no pending interrupt left, the resume map
   ``{interrupt_id: value}`` is planted on the run and it is requeued
-  ("resolution enqueues a resume", §3.2).
+  ("resolution enqueues a resume").
 
-The resume value is built per source (§4.5, A44): ``{action, payload?,
+The resume value is built per source: ``{action, payload?,
 text?}`` for ``require_approval``; ``{"decisions": [...]}`` in the
 ``HumanInTheLoopMiddleware`` shape for ``tool_review``; ``{"responses":
 {...}}`` for an MCP elicitation; the resolver payload verbatim for a raw
@@ -74,12 +74,12 @@ Caller = Annotated[Identity, Depends(current_identity)]
 
 _E = {"model": ErrorResponse}
 
-#: Actions whose resolution carries a ``text`` (§4.3 table).
+#: Actions whose resolution carries a ``text`` (table).
 _TEXT_ACTIONS = frozenset({"feedback", "respond"})
 
 
 def can_resolve(record: InterruptRecord, identity: Identity) -> bool:
-    """§4.3 authority: the approver role when set, else the run's initiator."""
+    """Who may resolve: the approver role when set, else the run's initiator."""
     if record.approver_role is not None:
         return record.approver_role in identity.roles
     return record.initiator_id is not None and record.initiator_id == identity.user_id
@@ -137,7 +137,7 @@ async def list_interrupts(
     ),
     limit: Annotated[int, Query(ge=1, le=MAX_INBOX_LIMIT)] = 100,
 ) -> InterruptList:
-    """The approver inbox (§2.5): interrupts the caller may resolve or initiated."""
+    """The approver inbox: interrupts the caller may resolve or initiated."""
     wanted = None if status == "all" else InterruptStatus(status)
     records = await backend.interrupts.list(
         status=wanted, visible_to=viewer(caller), limit=limit
@@ -151,7 +151,7 @@ async def list_interrupts(
     responses={400: _E, 401: _E, 404: _E},
 )
 async def get_interrupt(interrupt_id: str, backend: Backend, caller: Caller) -> InterruptOut:
-    """One §4.2 record."""
+    """One record."""
     return interrupt_out(await _visible_or_404(backend, interrupt_id, caller))
 
 
@@ -159,7 +159,7 @@ def _schema_errors(schema: Mapping[str, Any], instance: Any) -> list[dict[str, A
     """``instance`` against a JSON Schema (an ``edit_schema``, a tool's ``args_schema``).
 
     An unusable schema refuses every edit: the gateway enforces the policy it
-    was given (A15), it never skips it.
+    was given, it never skips it.
     """
     schema = dict(schema)
     validator_cls = jsonschema.validators.validator_for(
@@ -184,7 +184,7 @@ MAX_EDIT_ERRORS = 20
 
 
 def _check_edit(schema: Mapping[str, Any] | None, payload: Any) -> None:
-    """§4.3: an ``edit`` payload must validate against the schema → else ``422``."""
+    """An ``edit`` payload must validate against the schema → else ``422``."""
     if schema is None:
         return
     errors = _schema_errors(schema, payload)
@@ -198,7 +198,7 @@ def _check_edit(schema: Mapping[str, Any] | None, payload: Any) -> None:
 
 
 def _decision_value(decision: Decision, record: InterruptRecord) -> dict[str, Any]:
-    """Validate one decision against the record and build its resume entry (§4.3)."""
+    """Validate one decision against the record and build its resume entry."""
     if decision.action not in record.actions:
         raise ApiError(
             422,
@@ -223,7 +223,7 @@ def _decision_value(decision: Decision, record: InterruptRecord) -> dict[str, An
 
 
 def _elicitation_resume(decision: Decision, record: InterruptRecord) -> dict[str, Any]:
-    """MCP elicitation (§4.5): ``{"responses": {key: {action, content?}}}``.
+    """MCP elicitation: ``{"responses": {key: {action, content?}}}``.
 
     ``edit`` answers every request: ``payload`` maps each request ``key`` to
     its form content (or is already ``{"responses": {...}}``). ``reject``
@@ -258,7 +258,7 @@ def _elicitation_resume(decision: Decision, record: InterruptRecord) -> dict[str
 def _review_decision(
     decision: Decision, request: Mapping[str, Any], config: Mapping[str, Any] | None, index: int
 ) -> dict[str, Any]:
-    """One ``HumanInTheLoopMiddleware`` decision for one action request (§4.5)."""
+    """One ``HumanInTheLoopMiddleware`` decision for one action request."""
     allowed = [str(item) for item in (config or {}).get("allowed_decisions") or ()]
     if decision.action not in allowed:
         raise ApiError(
@@ -296,7 +296,7 @@ def _review_decision(
 
 
 def _tool_review_resume(body: ResolveRequest, record: InterruptRecord) -> dict[str, Any]:
-    """``HumanInTheLoopMiddleware`` (§4.5): ``{"decisions": [...]}`` in request order.
+    """``HumanInTheLoopMiddleware``: ``{"decisions": [...]}`` in request order.
 
     One decision per action request; a review of a single call may also use
     the ``{action, payload?, text?}`` form. ``edit`` payloads are the edited
@@ -330,7 +330,7 @@ def _tool_review_resume(body: ResolveRequest, record: InterruptRecord) -> dict[s
 
 
 def _generic_resume(body: ResolveRequest, record: InterruptRecord) -> Any:
-    """A raw ``interrupt(value)`` (§4.5): the resolver payload, verbatim.
+    """A raw ``interrupt(value)``: the resolver payload, verbatim.
 
     ``respond`` with a ``payload`` resumes with that object; with only
     ``text``, with the text.
@@ -352,7 +352,7 @@ def _generic_resume(body: ResolveRequest, record: InterruptRecord) -> Any:
 
 
 def _resume_value(body: ResolveRequest, record: InterruptRecord) -> Any:
-    """The resume value the gateway builds, per source (§4.5)."""
+    """The resume value the gateway builds, per source."""
     if record.kind == TOOL_REVIEW_KIND:
         return _tool_review_resume(body, record)
     if record.kind == GENERIC_KIND:
@@ -370,8 +370,8 @@ def _resume_value(body: ResolveRequest, record: InterruptRecord) -> Any:
 
 
 def _check_authority(record: InterruptRecord, caller: Identity, settings: GatewaySettings) -> None:
-    """§4.3 authority (``403 forbidden_role``): the approver role, else the
-    initiator; under a ``HITL_STRICT_SCOPES`` scope, never the initiator (A32)."""
+    """Who may resolve (``403 forbidden_role``): the approver role, else the
+    initiator; under a ``HITL_STRICT_SCOPES`` scope, never the initiator."""
     if not can_resolve(record, caller):
         raise ApiError(
             403,
@@ -399,7 +399,7 @@ def _check_authority(record: InterruptRecord, caller: Identity, settings: Gatewa
 def _ends_run_rejected(
     backend: GatewayBackend, record: InterruptRecord, body: ResolveRequest, run: RunRecord | None
 ) -> bool:
-    """§4.3: a headless ``reject`` of an approval ends the run ``rejected``.
+    """A headless ``reject`` of an approval ends the run ``rejected``.
 
     Approvals are ``require_approval`` interrupts (incl. ``ApprovalGate`` and
     per-tool gates). A tool review's ``reject`` is the middleware's own
@@ -421,7 +421,7 @@ def _ends_run_rejected(
 async def resolve_interrupt(
     interrupt_id: str, body: ResolveRequest, backend: Backend, settings: Settings, caller: Caller
 ) -> InterruptOut:
-    """Resolve (§4.3): ``200`` | ``403 forbidden_role`` | ``409`` stale | ``410`` | ``422``."""
+    """Resolve: ``200`` | ``403 forbidden_role`` | ``409`` stale | ``410`` | ``422``."""
     record = await _visible_or_404(backend, interrupt_id, caller)
     _check_authority(record, caller, settings)
     if record.status is InterruptStatus.EXPIRED or (
@@ -437,7 +437,7 @@ async def resolve_interrupt(
         raise ApiError(
             409,
             ErrorCode.VERSION_CONFLICT,
-            "the interrupt was already resolved (the first resolver wins, A12)",
+            "the interrupt was already resolved (the first resolver wins)",
             {"version": record.version, "resolved_by": record.resolved_by},
         )
     if record.status is not InterruptStatus.PENDING:
@@ -467,7 +467,7 @@ async def resolve_interrupt(
         raise ApiError(
             409,
             ErrorCode.VERSION_CONFLICT,
-            "the interrupt changed under this resolution (the first resolver wins, A12)",
+            "the interrupt changed under this resolution (the first resolver wins)",
             {"version": current.version if current is not None else None},
         ) from None
 
@@ -498,7 +498,7 @@ async def resolve_interrupt(
 def _graph_value(record: InterruptRecord) -> Any:
     """What ``require_approval`` returns in the graph: the resolution plus who decided.
 
-    M12 gap review: UC1's write path records which dba approved and UC2 writes
+    gap review: UC1's write path records which dba approved and UC2 writes
     the approver into its MCP receipt — the identity is the gateway's alone, so
     agent code cannot derive it. The other sources keep their own shapes
     verbatim (the middleware's ``decisions``, MCP ``responses``, raw payloads).
@@ -510,13 +510,13 @@ def _graph_value(record: InterruptRecord) -> Any:
 
 
 async def _resume_when_settled(backend: GatewayBackend, run_id: str) -> None:
-    """Requeue the run once none of its interrupts is pending (§3.2).
+    """Requeue the run once none of its interrupts is pending.
 
     The resume map carries every resolution the run has; the worker narrows it
     to the interrupts its checkpoint still awaits.
 
     A ``require_approval`` resolution is handed to the graph with
-    ``resolved_by`` added (§4.5) — who decided is on the record, never inside
+    ``resolved_by`` added — who decided is on the record, never inside
     the stored resolution, so the REST shape stays exactly what was sent.
     """
     if await backend.interrupts.list(status=InterruptStatus.PENDING, run_id=run_id):

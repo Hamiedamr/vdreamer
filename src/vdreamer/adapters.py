@@ -1,16 +1,16 @@
-"""``resources.yaml`` adapters: qdrant, neo4j, sql (PRD §3.7, A35).
+"""``resources.yaml`` adapters: qdrant, neo4j, sql.
 
 Workers open one pooled async client per declared resource at start and
 inject it, native and unwrapped, as ``ctx.resources[alias]``: an
 ``AsyncQdrantClient``, a neo4j ``AsyncDriver``, a SQLAlchemy ``AsyncEngine``.
 Query APIs are not wrapped. ``type: mcp`` entries are tools, not resources
-(``vdreamer.mcp``, §2.7).
+(``vdreamer.mcp``).
 
 A new type is one :class:`ResourceAdapter` subclass — ``connect`` /
 ``probe`` / ``close`` — registered with :func:`register_adapter`; its
 ``__init__`` validates the entry at config load.
 
-``read_only: true`` forces read sessions (A35):
+``read_only: true`` forces read sessions:
 
 - **sql:** every pooled connection is put in read-only mode as it opens
   (PostgreSQL ``SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY``,
@@ -27,9 +27,9 @@ A new type is one :class:`ResourceAdapter` subclass — ``connect`` /
 
 The guards forward everything else to the native object (``.native``).
 
-Secrets never appear in YAML (A23): ``api_key_env``, ``user_env``,
+Secrets never appear in YAML: ``api_key_env``, ``user_env``,
 ``password_env``, ``url_env`` name environment variables. Endpoints must
-match ``NETWORK_ALLOWLIST`` (A40) at load and at connect.
+match ``NETWORK_ALLOWLIST`` at load and at connect.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from vdreamer.network import (
 )
 from vdreamer.resources import ResourcesError
 
-#: Types handled elsewhere: their entries are not resources (§2.7).
+#: Types handled elsewhere: their entries are not resources.
 NON_RESOURCE_TYPES: Final = frozenset({"mcp"})
 
 
@@ -432,7 +432,7 @@ class SqlAdapter(ResourceAdapter):
         except ArgumentError as exc:
             raise self.error(f"cannot parse the database URL: {exc}") from exc
         if config and parsed.password:
-            raise self.error("a password in url puts a secret in YAML (A23); use url_env")
+            raise self.error("a password in url puts a secret in YAML; use url_env")
         if self.read_only and parsed.get_backend_name() not in READ_ONLY_SESSION_SQL:
             raise self.error(
                 f"read_only is not enforceable for {parsed.get_backend_name()!r} "

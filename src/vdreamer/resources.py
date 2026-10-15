@@ -1,14 +1,14 @@
-"""``resources.yaml`` loading (PRD §3.7, A35).
+"""``resources.yaml`` loading.
 
 The file maps an alias to one resource entry, each with a ``type``:
 ``{vectors: {type: qdrant, ...}, netinv: {type: mcp, ...}}``. The
-``type: mcp`` entries are MCP servers (``vdreamer.mcp``, §2.7, A39); every
+``type: mcp`` entries are MCP servers (``vdreamer.mcp``); every
 other type is a resource adapter (``vdreamer.adapters``: qdrant, neo4j,
 sql, plus any registered with ``register_adapter``), opened by the worker
-and injected as ``ctx.resources[alias]`` (``vdreamer.backends``, A35). This
+and injected as ``ctx.resources[alias]`` (``vdreamer.backends``). This
 module only loads the file and checks each entry's common shape.
 
-Secrets never appear in YAML (A23): an entry references environment
+Secrets never appear in YAML: an entry references environment
 variables through ``*_env`` keys, and a key that would hold a secret inline
 (``password``, ``token``, ``api_key``, …) is refused at load.
 """
@@ -25,7 +25,7 @@ import yaml
 #: Where the CLI looks when ``--resources`` is not given.
 RESOURCES_ENV: Final = "VDREAMER_RESOURCES"
 
-#: Keys that would carry a secret inline (A23: reference ``*_env`` instead).
+#: Keys that would carry a secret inline (reference ``*_env`` instead).
 SECRET_KEYS: Final = frozenset(
     {"password", "token", "secret", "api_key", "apikey", "bearer", "authorization", "credentials"}
 )
@@ -45,7 +45,7 @@ def check_entry(alias: str, entry: Any) -> dict[str, Any]:
     inline = sorted(str(key) for key in entry if str(key).lower() in SECRET_KEYS)
     if inline:
         raise ResourcesError(
-            f"resource {alias!r}: {', '.join(inline)} would put a secret in YAML (A23); "
+            f"resource {alias!r}: {', '.join(inline)} would put a secret in YAML; "
             "reference an environment variable with a *_env key instead"
         )
     return dict(entry)

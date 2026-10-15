@@ -1,4 +1,4 @@
-"""The code sandbox: ``ctx.sandbox.run(code, inputs, timeout_s=60)`` (PRD §3.5, D19, A19).
+"""The code sandbox: ``ctx.sandbox.run(code, inputs, timeout_s=60)``.
 
 Generated code runs as a worker subprocess under ``vdreamer._sandbox_launch``:
 
@@ -24,7 +24,7 @@ extension: PNG/JPEG/SVG → ``image``, HTML → ``html``, JSON objects →
 hard links and special files there are ignored — they could point at the
 worker's own files.
 
-POSIX only (D19): on Windows dev hosts ``run`` raises :class:`SandboxUnavailable`.
+POSIX only: on Windows dev hosts ``run`` raises :class:`SandboxUnavailable`.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ class SandboxUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class SandboxLimits:
-    """The rlimits (A19). ``cpu_s=None`` means ``ceil(timeout_s) + 1``."""
+    """The rlimits. ``cpu_s=None`` means ``ceil(timeout_s) + 1``."""
 
     memory_bytes: int = 2 * 1024 * 1024 * 1024
     file_size_bytes: int = 256 * 1024 * 1024
@@ -105,7 +105,7 @@ class SandboxResult(pydantic.BaseModel):
 def unavailable_reason() -> str | None:
     """Why the sandbox cannot run on this host, or ``None`` when it can."""
     if os.name != "posix":
-        return "the sandbox needs a POSIX worker (D19); Windows hosts cannot run it"
+        return "the sandbox needs a POSIX worker; Windows hosts cannot run it"
     return None
 
 
@@ -357,7 +357,7 @@ def _output_artifact(name: str, data: bytes) -> tuple[ArtifactKind, Any]:
 
 
 async def collect_outputs(out_dir: Path) -> tuple[list[ArtifactRef], list[str]]:
-    """Turn ``out/``'s regular files into artifacts (D7 order, one by one)."""
+    """Turn ``out/``'s regular files into artifacts (order, one by one)."""
     refs: list[ArtifactRef] = []
     skipped: list[str] = []
     total = 0

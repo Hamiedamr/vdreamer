@@ -1,22 +1,22 @@
-"""The SSE transport (PRD §2.5, §3.3, A3, A22).
+"""The SSE transport.
 
 One stream serves one run: replay every envelope with ``seq >
-Last-Event-ID``, then tail live until the run ends. Framing per §3.3::
+Last-Event-ID``, then tail live until the run ends. Framing::
 
     id: {run_id}:{seq}
     data: {envelope JSON}
 
-with ``: heartbeat`` comment frames every 15 s of silence (§3.3) and the
-response headers ``Cache-Control: no-cache``, ``X-Accel-Buffering: no`` (A22).
-No ``event:`` field: clients consume with fetch (D14), read the type from the
-envelope, and ignore unknown types (§6.1).
+with ``: heartbeat`` comment frames every 15 s of silence and the
+response headers ``Cache-Control: no-cache``, ``X-Accel-Buffering: no``.
+No ``event:`` field: clients consume with fetch, read the type from the
+envelope, and ignore unknown types.
 
 The loop never trusts a wake-up for content — the log is the source of truth
-(A3). It subscribes to the hub *before* the first read, re-reads after every
+. It subscribes to the hub *before* the first read, re-reads after every
 wake-up and every heartbeat (so a lost ``NOTIFY`` costs at most one heartbeat
 of latency), and ends when it has sent a terminal ``run.status`` or the run row
 is terminal with nothing left to send. ``awaiting_approval`` is not an end:
-the same run resumes after a resolution (§3.2), so the stream stays open.
+the same run resumes after a resolution, so the stream stays open.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from vdreamer.eventlog import EventHub, EventReader
 from vdreamer.events import SSE_BUFFERING_HEADER, SSE_BUFFERING_VALUE, EventEnvelope, EventType
 from vdreamer.queue import TERMINAL_STATES, RunRecord, RunState
 
-#: SSE response headers (A22; ``X-Protocol-Version`` is added by the middleware).
+#: SSE response headers (``X-Protocol-Version`` is added by the middleware).
 SSE_HEADERS: Final[dict[str, str]] = {
     "Cache-Control": "no-cache",
     SSE_BUFFERING_HEADER: SSE_BUFFERING_VALUE,
@@ -38,7 +38,7 @@ SSE_HEADERS: Final[dict[str, str]] = {
 
 SSE_MEDIA_TYPE: Final[str] = "text/event-stream"
 
-#: The comment frame sent after ``heartbeat_s`` of silence (§3.3).
+#: The comment frame sent after ``heartbeat_s`` of silence.
 HEARTBEAT_FRAME: Final[str] = ": heartbeat\n\n"
 
 _TERMINAL_STATUSES: Final[frozenset[str]] = frozenset(state.value for state in TERMINAL_STATES)
@@ -63,7 +63,7 @@ class LastEventIdError(ValueError):
 
 
 def parse_last_event_id(value: str | None, run_id: str) -> int:
-    """The ``seq`` to resume after: ``"{run_id}:{seq}"`` (§3.3) or a bare ``seq``.
+    """The ``seq`` to resume after: ``"{run_id}:{seq}"`` or a bare ``seq``.
 
     ``None``/empty → 0 (replay from the start).
 
@@ -133,7 +133,7 @@ async def run_event_stream(
 
 
 def choose_thread_run(runs: list[RunRecord]) -> RunRecord | None:
-    """The run ``GET /threads/{id}/events`` joins (§2.5): the active one, else the latest.
+    """The run ``GET /threads/{id}/events`` joins: the active one, else the latest.
 
     "Active" prefers ``running``/``awaiting_approval`` over ``queued``: with
     ``wait_for_idle`` a thread can hold one of each, and the one in flight is

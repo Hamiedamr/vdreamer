@@ -1,36 +1,34 @@
-"""``vdreamer`` CLI (PRD §2.3).
+"""The ``vdreamer`` command line.
 
-Milestone 0 surface: ``--version``, ``validate``, ``doctor --offline`` — the
-pieces the CI matrix depends on. Milestone 1 wires the D2 discovery flags into
-``validate``: ``--registry PATH`` / ``--agents-dir PATH`` resolve a bare agent
-name (``vdreamer.discovery.resolve_agent``), while a ``pkg.module:agent`` spec
-stays explicit and wins. Milestone 3 adds the topology entrypoints: ``worker``
-(one process, one agent, Postgres queue + checkpointer — A7) and ``dev`` (the
-D11 single-process mode on SQLite + in-memory queue), plus ``migrate`` (the
-idempotent schema application, DSN from ``VDREAMER_PG_DSN``, A23). Milestone
-4 adds ``serve`` (the REST/SSE gateway, D20) and turns ``dev`` without
-``--input`` into gateway + worker in one process. Milestone 7 adds
-``--models`` (models.yaml) next to ``--resources`` on ``validate``,
-``doctor``, ``worker`` and ``dev``. ``run`` lands with Milestone 11, and
-``export-schema``/``bundle`` with Milestone 10.
+- ``dev`` — the API and a worker in one process on one SQLite file;
+  ``--input`` runs once and prints every event; ``--reload`` restarts on
+  source changes.
+- ``serve`` / ``worker`` / ``migrate`` — the production processes on
+  Postgres, and the idempotent schema setup.
+- ``run`` — the terminal client (:mod:`vdreamer.client`).
+- ``validate`` / ``doctor`` — check an agent and its aliases; check an
+  install and assert zero egress.
+- ``export-schema`` / ``bundle`` — the client contract (OpenAPI, event
+  schema, TypeScript types, conformance kit); the offline install set.
 
-Milestone 10 also applies the zero-egress environment (:mod:`vdreamer.offline`)
-before every command but ``bundle`` — the one that downloads, on a connected
-host — and adds ``dev --reload`` (:mod:`vdreamer.reload`). Milestone 11 adds
-``run``, the terminal client (:mod:`vdreamer.client`), and the conformance kit
-in ``export-schema``'s output.
+Agents are named by a ``pkg.module:agent`` spec, or by a bare name resolved
+through ``--registry`` / ``--agents-dir``. ``--models`` / ``--resources``
+point at ``models.yaml`` / ``resources.yaml``. Every command but ``bundle``
+(the one that downloads, on a connected host) first applies the zero-egress
+environment (:mod:`vdreamer.offline`).
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 
 from vdreamer import __version__
 
 
 def _add_config_flags(parser: argparse.ArgumentParser) -> None:
-    """``--models`` / ``--resources`` (§3.6, §3.7)."""
+    """``--models`` / ``--resources``."""
     parser.add_argument(
         "--models",
         metavar="PATH",
@@ -53,13 +51,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"vdreamer {__version__}")
 
+    env_file_help = (
+        "read environment variables from this file (default: .env in the working "
+        "directory, when there is one); variables already set win"
+    )
+    parser.add_argument("--env-file", metavar="PATH", default=None, help=env_file_help)
+
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
 
     validate_parser = subparsers.add_parser(
         "validate",
         help="validate an agent against the vdreamer contract",
         description=(
-            "Load 'pkg.module:agent' (or resolve a bare name via --registry / --agents-dir, D2) "
+            "Load 'pkg.module:agent' (or resolve a bare name via --registry / --agents-dir) "
             "and run the developer-contract checks."
         ),
     )
@@ -72,13 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--registry",
         metavar="PATH",
         default=None,
-        help="path to a vdreamer.yaml registry mapping names to import specs (D2)",
+        help="path to a vdreamer.yaml registry mapping names to import specs",
     )
     validate_parser.add_argument(
         "--agents-dir",
         metavar="PATH",
         default=None,
-        help="flat directory of agent modules to resolve bare names against (D2)",
+        help="flat directory of agent modules to resolve bare names against",
     )
     _add_config_flags(validate_parser)
     validate_parser.add_argument(
@@ -106,12 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Apply the vdreamer schema to Postgres: the runs table and its "
             "active-thread index, the run_events log, and the checkpointer's own "
             "migrations (AsyncPostgresSaver.setup). All steps are idempotent. "
-            "The DSN comes from VDREAMER_PG_DSN — never the command line (A23)."
+            "The DSN comes from VDREAMER_PG_DSN — never the command line."
         ),
     )
 
     def _add_topology_agent_flags(parser: argparse.ArgumentParser) -> None:
-        """The D2 discovery flags shared by the worker/dev entrypoints."""
+        """The discovery flags shared by the worker/dev entrypoints."""
         parser.add_argument(
             "--agent",
             metavar="NAME",
@@ -122,13 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
             "--registry",
             metavar="PATH",
             default=None,
-            help="path to a vdreamer.yaml registry mapping names to import specs (D2)",
+            help="path to a vdreamer.yaml registry mapping names to import specs",
         )
         parser.add_argument(
             "--agents-dir",
             metavar="PATH",
             default=None,
-            help="flat directory of agent modules to resolve bare names against (D2)",
+            help="flat directory of agent modules to resolve bare names against",
         )
 
     def _add_resources_flag(parser: argparse.ArgumentParser) -> None:
@@ -136,11 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     worker_parser = subparsers.add_parser(
         "worker",
-        help="run the worker loop for one agent (PRD §2.1)",
+        help="run the worker loop for one agent",
         description=(
-            "Serve one agent: claim queued runs from the Postgres queue (A7), drive "
+            "Serve one agent: claim queued runs from the Postgres queue, drive "
             "them through the agent's graph, and write the protocol events to the "
-            "run_events log. The DSN comes from VDREAMER_PG_DSN (A23); run "
+            "run_events log. The DSN comes from VDREAMER_PG_DSN; run "
             "`vdreamer migrate` once before the first worker."
         ),
     )
@@ -171,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--host",
             metavar="ADDR",
             default="127.0.0.1",
-            help="internal interface to bind (default 127.0.0.1; 0.0.0.0/:: refused, A14)",
+            help="internal interface to bind (default 127.0.0.1; 0.0.0.0/:: refused)",
         )
         parser.add_argument(
             "--port", metavar="PORT", type=int, default=8000, help="port (default 8000)"
@@ -179,13 +183,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_parser = subparsers.add_parser(
         "serve",
-        help="run the REST/SSE gateway (PRD §2.5)",
+        help="run the REST/SSE gateway",
         description=(
             "Serve the /api/v1 REST/SSE contract for the agents named by --agent "
-            "(repeatable), or every agent of --registry / --agents-dir (D2). Stateless: "
-            "everything lives in Postgres (VDREAMER_PG_DSN, A23); run `vdreamer migrate` "
+            "(repeatable), or every agent of --registry / --agents-dir. Stateless: "
+            "everything lives in Postgres (VDREAMER_PG_DSN); run `vdreamer migrate` "
             "first and one `vdreamer worker` per agent. Requires VDREAMER_INTERNAL_TOKEN "
-            "(and optionally VDREAMER_INTERNAL_TOKEN_PREVIOUS for rotation, A14)."
+            "(and optionally VDREAMER_INTERNAL_TOKEN_PREVIOUS for rotation)."
         ),
     )
     serve_parser.add_argument(
@@ -199,23 +203,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--registry",
         metavar="PATH",
         default=None,
-        help="path to a vdreamer.yaml registry mapping names to import specs (D2)",
+        help="path to a vdreamer.yaml registry mapping names to import specs",
     )
     serve_parser.add_argument(
         "--agents-dir",
         metavar="PATH",
         default=None,
-        help="flat directory of agent modules (D2)",
+        help="flat directory of agent modules",
     )
     _add_bind_flags(serve_parser)
 
     dev_parser = subparsers.add_parser(
         "dev",
-        help="single-process dev mode: gateway + worker on one SQLite file (D11)",
+        help="single-process dev mode: gateway + worker on one SQLite file",
         description=(
             "Run everything in one process with no infrastructure: the agent's "
             "runs, events, threads, interrupts and checkpoints on one local SQLite "
-            "file (D11), surviving restarts. With --input, enqueue and drive exactly one run and "
+            "file, surviving restarts. With --input, enqueue and drive exactly one run and "
             "report the outcome (a smoke of the whole lifecycle); without it, serve the "
             "REST/SSE gateway and run the worker loop until Ctrl-C. The token comes from "
             "VDREAMER_INTERNAL_TOKEN, or a one-off token is printed. --reload restarts the "
@@ -269,10 +273,10 @@ def build_parser() -> argparse.ArgumentParser:
         "(repeatable)",
     )
     export_parser.add_argument(
-        "--registry", metavar="PATH", default=None, help="a vdreamer.yaml registry (D2)"
+        "--registry", metavar="PATH", default=None, help="a vdreamer.yaml registry"
     )
     export_parser.add_argument(
-        "--agents-dir", metavar="PATH", default=None, help="a flat directory of agent modules (D2)"
+        "--agents-dir", metavar="PATH", default=None, help="a flat directory of agent modules"
     )
     export_parser.add_argument(
         "--out", metavar="DIR", default="vdreamer-schema", help="output directory "
@@ -315,11 +319,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="send typed text as {NAME: text} instead of {messages: [...]}",
     )
-    run_parser.add_argument("--trigger", action="store_true", help="start via /trigger (D15)")
+    run_parser.add_argument("--trigger", action="store_true", help="start via /trigger")
     run_parser.add_argument(
         "--service",
         action="store_true",
-        help="--token-env holds a service token (A16): trigger only, no identity headers",
+        help="--token-env holds a service token: trigger only, no identity headers",
     )
     run_parser.add_argument("--idempotency-key", metavar="KEY", default=None)
     run_parser.add_argument("--callback", metavar="URL", default=None, help="/trigger callback")
@@ -408,13 +412,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not fetch the tiktoken encodings into OUT/tiktoken",
     )
+    # Also accepted after the command name; SUPPRESS keeps the global value.
+    for command_parser in subparsers.choices.values():
+        command_parser.add_argument(
+            "--env-file", metavar="PATH", default=argparse.SUPPRESS, help=env_file_help
+        )
     return parser
+
+
+def _load_env_file(path: str | None, command: str) -> bool:
+    """Apply ``.env`` (or ``--env-file``) before anything reads the environment."""
+    from vdreamer.dotenv import EnvFileError, load_env_file
+
+    try:
+        loaded = load_env_file(path)
+    except (OSError, EnvFileError) as exc:
+        print(f"vdreamer: {exc}", file=sys.stderr)
+        return False
+    if loaded is not None and loaded.applied and command != "run":
+        # Names only, never values; `run` keeps its terminal output clean.
+        names = ", ".join(loaded.applied)
+        print(f"vdreamer: from {loaded.path}: {names}", file=sys.stderr)
+    return True
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point. Returns a process exit code."""
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if not _load_env_file(args.env_file, args.command):
+        return 1
 
     if args.command == "bundle":
         # The one command that downloads (on a connected host): no offline env.
@@ -439,7 +467,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
 
-    # §5.2: tracing off, HF offline, no telemetry — before any command imports the stack.
+    # Tracing off, HF offline, no telemetry — before any command imports the stack.
     from vdreamer.offline import apply_offline_env
 
     apply_offline_env()

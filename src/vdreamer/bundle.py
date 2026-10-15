@@ -1,4 +1,4 @@
-"""``vdreamer bundle`` — the offline install set, built on a connected host (PRD §5.3).
+"""``vdreamer bundle`` — the offline install set, built on a connected host.
 
 Operator-run, with plain pip (never uv: the plain-pip CI job holds vdreamer to
 that). Into ``--out`` (default ``./vdreamer-bundle``):
@@ -16,10 +16,10 @@ that). Into ``--out`` (default ``./vdreamer-bundle``):
   ``name==version --hash=sha256:…`` (all of a version's files hashed), for
   ``pip install --no-index --find-links wheelhouse --require-hashes``.
 - ``tiktoken/`` — the tiktoken encodings, so token counting never downloads
-  them (§5.2: set ``TIKTOKEN_CACHE_DIR`` to it). Skipped with
+  them (set ``TIKTOKEN_CACHE_DIR`` to it). Skipped with
   ``--no-tiktoken`` or when tiktoken is not installed here.
 - ``fastembed/`` — with ``--models models.yaml``, every fastembed alias
-  downloaded into a cache the workers load with ``local_files_only`` (A36):
+  downloaded into a cache the workers load with ``local_files_only``:
   ship it as the ``fastembed.cache_dir`` (baked into the image or a
   read-only volume).
 - ``bundle.json`` — what was bundled, with sha256s; ``INSTALL.txt`` — the
@@ -313,7 +313,7 @@ def fetch_fastembed(models_yaml: str, target: Path) -> list[str]:
     for alias, model in sorted(aliases.items()):
         print(f"bundle: fetching fastembed {alias} ({model.model})")
         classes[model.kind](model_name=model.model, cache_dir=str(target), lazy_load=True)
-    # Prove the cache is what the workers will see: located offline (A36).
+    # Prove the cache is what the workers will see: located offline.
     settings = FastembedSettings(cache_dir=str(target))
     for model in aliases.values():
         check_fastembed_files(model, settings)
@@ -322,7 +322,7 @@ def fetch_fastembed(models_yaml: str, target: Path) -> list[str]:
 
 def _install_text(options: BundleOptions) -> str:
     lines = [
-        "vdreamer offline install (PRD §5.3) — on the air-gapped host, no uv needed:",
+        "vdreamer offline install — on the air-gapped host, no uv needed:",
         "",
         "  python -m venv /opt/vdreamer/venv",
         "  /opt/vdreamer/venv/bin/pip install --no-index --find-links ./wheelhouse \\",
@@ -331,11 +331,11 @@ def _install_text(options: BundleOptions) -> str:
         "",
     ]
     if (options.out / "tiktoken").is_dir():
-        lines += ["Ship tiktoken/ and set TIKTOKEN_CACHE_DIR to it (§5.2).", ""]
+        lines += ["Ship tiktoken/ and set TIKTOKEN_CACHE_DIR to it.", ""]
     if (options.out / "fastembed").is_dir():
         lines += [
             "Ship fastembed/ (baked into the image or a read-only volume) and point",
-            "models.yaml `fastembed.cache_dir` at it (A36).",
+            "models.yaml `fastembed.cache_dir` at it.",
             "",
         ]
     return "\n".join(lines)

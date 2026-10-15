@@ -1,42 +1,35 @@
-"""``vdreamer validate`` — developer-contract checks (PRD §2.3).
+"""``vdreamer validate`` — developer-contract checks.
 
-Milestone 0 loaded the agent, checked the attribute contract (PRD §2.2), and
-built and compiled the graph (PRD §2.4). Milestone 1 adds the new-contract
-checks — ``tool_policies`` / ``interrupt_policies`` shape (§2.7, §4.5),
-per-agent ``durability`` (§2.4, A42), and the ``agent_kwargs()`` wiring
-proof — plus the D2 discovery flags on the CLI: ``--registry`` /
-``--agents-dir`` resolve a bare name through
-``vdreamer.discovery.resolve_agent``, while a ``pkg.module:agent`` spec stays
-explicit (it short-circuits inside ``resolve_agent``). Alias resolution and
-model-file probes (Milestone 7) extend this module as they land.
+It loads the agent (a ``pkg.module:agent`` spec, or a bare name through
+``--registry`` / ``--agents-dir``), checks its declarations, and builds and
+compiles its graph:
 
-Milestone 5 adds the tool checks (§2.3): **no ungoverned tools** — every
-``ToolNode`` in the compiled graph (subgraphs included) either holds only
-``GovernedTool`` proxies or runs under ``VDreamerToolMiddleware`` — and
-**approval routes wired** for per-tool gates: a headless agent's approval
-needs an ``approver_role`` (A16). Milestone 8 extends ``approval.routes`` to
-every ``ApprovalGate`` (no offered action unwired) and to headless
-``HumanInTheLoopMiddleware`` reviews. ``--resources`` lets ``build()`` call
-``ctx.tools.mcp(...)``: the servers are declared but not contacted, so their
-tool lists are empty here.
+- **the attribute contract** — name, mode, ``input_schema`` (required for
+  headless agents), alias lists, ``tool_policies`` / ``interrupt_policies``,
+  ``durability`` — and the ``agent_kwargs()`` wiring;
+- **no ungoverned tools** — every ``ToolNode`` in the compiled graph
+  (subgraphs included) holds only ``GovernedTool`` proxies or runs under
+  ``VDreamerToolMiddleware``;
+- **approval routes wired** — every ``ApprovalGate`` action is routed, and a
+  headless agent's approvals (per-tool gates, gates, and
+  ``HumanInTheLoopMiddleware`` reviews) name an ``approver_role``;
+- **the aliases** — every alias in ``BaseAgent.models`` is in ``models.yaml``
+  and every alias in ``BaseAgent.resources`` in ``resources.yaml``. Each is
+  probed (a chat endpoint must answer and serve the configured model, a
+  fastembed model's files must be in the cache, a resource must connect);
+  ``--no-probe`` stays off the network but still checks model files and
+  ``*_env`` variables. ``build()`` receives the real chat models and an
+  unconnected placeholder per resource; MCP servers are declared but not
+  contacted, so their tool lists are empty here;
+- **vdreamer's checkpointer used** — ``build()`` runs with a stand-in
+  checkpointer and store; a ``StateGraph`` is compiled by vdreamer, and
+  anything ``build()`` compiled itself (a compiled graph, ``create_agent``,
+  an ``@entrypoint``) must have been given exactly ``ctx.checkpointer``
+  (``**ctx.agent_kwargs()``) — none, or its own saver, would lose crash
+  recovery and resume.
 
-Milestone 7 adds the alias checks (§3.6, §3.7): every alias in
-``BaseAgent.models`` must be in ``models.yaml`` (``--models`` or
-``$VDREAMER_MODELS``) and every alias in ``BaseAgent.resources`` in
-``resources.yaml``. Each declared alias is then probed — a chat endpoint
-must answer and serve the configured model, a fastembed model's files must
-be in the cache, a resource must connect and pass its probe — and
-``--no-probe`` keeps validation off the network (model files and ``*_env``
-variables are still checked). ``build()`` receives the real chat models and
-fastembed objects (located, not loaded) and an unconnected placeholder per
-resource.
-
-Milestone 10 adds **vdreamer checkpointer used** (§2.3, §2.4): ``build()``
-runs with a stand-in checkpointer and store on ``ctx``; a ``StateGraph`` is
-compiled by vdreamer, and anything ``build()`` compiled itself (a compiled
-graph, ``create_agent``, an ``@entrypoint``) must have been given exactly
-``ctx.checkpointer`` (``**ctx.agent_kwargs()``) — none, or its own saver,
-would lose crash recovery (A6) and resume.
+:func:`static_checks` is the subset that needs no ``build()``; the process
+entrypoints run it at boot.
 """
 
 from __future__ import annotations
@@ -66,10 +59,10 @@ if TYPE_CHECKING:
     from vdreamer.mcp import MCPRegistry
     from vdreamer.models import AliasMap
 
-#: Agent name == route segment (PRD §2.5): a lowercase slug.
+#: Agent name == route segment: a lowercase slug.
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
-#: The exact ``BuildContext.agent_kwargs()`` key set (PRD §2.4).
+#: The exact ``BuildContext.agent_kwargs()`` key set.
 _AGENT_KWARGS_KEYS: tuple[str, ...] = ("checkpointer", "store", "context_schema", "middleware")
 
 
@@ -83,7 +76,7 @@ class Check:
 
 
 def ensure_compiled(graph: Any, checkpointer: Any = None, store: Any = None) -> Any:
-    """Compile a ``build()`` return value where needed (PRD §2.4).
+    """Compile a ``build()`` return value where needed.
 
     ``StateGraph`` instances compile here; already-runnable graphs (compiled
     graphs, functional-API ``@entrypoint`` graphs, ``create_agent`` /
@@ -112,7 +105,7 @@ def _check_str_seq(label: str, value: Any) -> Check:
 
 
 def _check_input_schema(agent: BaseAgent) -> Check:
-    """Headless/both agents must declare a pydantic input schema (D16, A16)."""
+    """Headless/both agents must declare a pydantic input schema."""
     needs_schema = agent.mode in (Mode.HEADLESS, Mode.BOTH)
     schema = agent.input_schema
     if schema is None:
@@ -156,7 +149,7 @@ def _build_context(
 
 
 def _check_checkpointer(graph: Any, compiled: Any, ctx: BuildContext) -> Check:
-    """vdreamer's checkpointer (and store) reach the graph (§2.4, A6)."""
+    """vdreamer's checkpointer (and store) reach the graph."""
     if isinstance(graph, StateGraph):
         return Check("checkpointer", True, "StateGraph compiled by vdreamer")
     used = getattr(compiled, "checkpointer", None)
@@ -252,7 +245,7 @@ def _middleware_governed(node: Any) -> bool:
 
 
 def _check_tools_governed(compiled: Any) -> Check:
-    """§2.3: no ungoverned tools — each one is a proxy or runs under the middleware."""
+    """No ungoverned tools — each one is a proxy or runs under the middleware."""
     ungoverned: list[str] = []
     count = 0
     for node in tool_nodes(compiled):
@@ -272,7 +265,7 @@ def _check_tools_governed(compiled: Any) -> Check:
 
 
 def _check_approval_routes(agent: BaseAgent, compiled: Any) -> Check:
-    """§2.3 approval routes wired, and A16's ``approver_role`` for headless agents.
+    """Approval routes wired, and ``approver_role`` for headless agents.
 
     Covers per-tool gates (``Policy.approval``), every ``ApprovalGate`` (an
     offered action with no node behind it is unwired — a ``HEADLESS`` agent's
@@ -296,7 +289,7 @@ def _check_approval_routes(agent: BaseAgent, compiled: Any) -> Check:
     problems: list[str] = []
     if missing:
         problems.append(
-            f"headless approval gates without an approver_role (A16): {sorted(missing)}"
+            f"headless approval gates without an approver_role: {sorted(missing)}"
         )
     for gate in approval_gates(compiled):
         kind = gate.get("kind")
@@ -310,11 +303,11 @@ def _check_approval_routes(agent: BaseAgent, compiled: Any) -> Check:
         if unwired:
             problems.append(f"ApprovalGate({kind!r}) has unwired routes: {unwired}")
         if headless and not gate.get("approver_role"):
-            problems.append(f"headless ApprovalGate({kind!r}) without an approver_role (A16)")
+            problems.append(f"headless ApprovalGate({kind!r}) without an approver_role")
     if headless and _has_hitl_middleware(compiled) and not _review_role(agent):
         problems.append(
             "headless HumanInTheLoopMiddleware without an approver_role: set "
-            "interrupt_policies['tool_review'] = InterruptPolicy(approver_role=...) (A16)"
+            "interrupt_policies['tool_review'] = InterruptPolicy(approver_role=...)"
         )
     if problems:
         return Check("approval.routes", False, "; ".join(problems))
@@ -336,7 +329,7 @@ def _has_hitl_middleware(compiled: Any) -> bool:
 
 
 def _review_role(agent: BaseAgent) -> bool:
-    """Every tool review gets an approver_role from ``interrupt_policies`` (§4.5)."""
+    """Every tool review gets an approver_role from ``interrupt_policies``."""
     policies = agent.interrupt_policies if isinstance(agent.interrupt_policies, Mapping) else {}
     policy = policies.get("tool_review")
     return isinstance(policy, InterruptPolicy) and bool(policy.approver_role)
@@ -347,7 +340,7 @@ def _check_policy_mapping(
     value: Any,
     policy_cls: type[Policy] | type[InterruptPolicy],
 ) -> Check:
-    """``tool_policies`` / ``interrupt_policies`` shape (PRD §2.7, §4.5).
+    """``tool_policies`` / ``interrupt_policies`` shape.
 
     Class-level mappings keyed by tool name or ``fnmatch`` glob: keys must be
     non-empty strings (glob *syntax* is not pre-validated) and values
@@ -379,20 +372,20 @@ def _check_policy_mapping(
 
 
 def _check_durability(agent: BaseAgent) -> Check:
-    """``durability`` must be ``"sync"`` or ``"async"`` (PRD §2.4, A42)."""
+    """``durability`` must be ``"sync"`` or ``"async"``."""
     value = getattr(agent, "durability", DEFAULT_DURABILITY)
     if value in ("sync", "async"):
         return Check("durability", True, str(value))
     return Check(
         "durability",
         False,
-        "durability must be 'sync' or 'async' (A42: 'sync' by default so every step is "
+        "durability must be 'sync' or 'async' ('sync' by default so every step is "
         f"checkpointed; set durability = 'async' per agent to opt out), got {value!r}",
     )
 
 
 def _check_agent_kwargs() -> Check:
-    """Cheap wiring proof for ``BuildContext.agent_kwargs()`` (PRD §2.4).
+    """Cheap wiring proof for ``BuildContext.agent_kwargs()``.
 
     Calls it on an empty ``BuildContext`` and asserts the exact key set with
     ``context_schema=VDreamerContext`` and a ``VDreamerToolMiddleware`` in
@@ -468,7 +461,7 @@ def validate_agent(
     models: Mapping[str, Any] | None = None,
     resources: Mapping[str, Any] | None = None,
 ) -> list[Check]:
-    """Run the developer-contract checks (Milestones 0, 1, 5) against one agent.
+    """Run the developer-contract checks (1, 5) against one agent.
 
     ``models`` / ``resources`` are what ``build()`` sees as ``ctx.models`` /
     ``ctx.resources``; the alias checks themselves are :func:`check_aliases`.
@@ -494,7 +487,7 @@ def _declared(agent: BaseAgent, attr: str) -> list[str]:
 async def check_aliases(
     agent: BaseAgent, config: BackendConfig, *, probe: bool = True
 ) -> tuple[list[Check], AliasMap, AliasMap]:
-    """§3.6/§3.7: each declared alias resolves and is reachable.
+    """Each declared alias resolves and is reachable.
 
     Returns the checks plus what ``build()`` gets: the chat models and the
     located fastembed objects, and an :class:`Unconnected` per resource.
@@ -563,7 +556,7 @@ def run_validate(
     """CLI entry point for ``vdreamer validate``. 0 = valid, 1 = invalid.
 
     ``spec`` is a ``pkg.module:agent`` spec (explicit — ``registry`` and
-    ``agents_dir`` are ignored), or a bare name resolved D2-style through
+    ``agents_dir`` are ignored), or a bare name resolved through
     ``vdreamer.discovery.resolve_agent``: registry first, then agents dir.
     """
     try:

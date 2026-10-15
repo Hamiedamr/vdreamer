@@ -1,50 +1,45 @@
-"""The ``serve``, ``worker`` and ``dev`` process entrypoints (M3 WP3, M4).
+"""The ``serve``, ``worker`` and ``dev`` process entrypoints.
 
-``serve`` is the PRD §2.1 Gateway row (Milestone 4): a stateless FastAPI app
-(D20) over Postgres — queue, threads, ``run_events`` (+ ``LISTEN`` for live
-SSE), interrupts, and the checkpointer for thread history — serving every
-agent named by ``--agent``/``--registry``/``--agents-dir``. Uvicorn binds the
-internal interface only (A14). ``vdreamer run`` (the terminal client) is
-Milestone 11.
+``serve`` is the gateway: a stateless FastAPI app over Postgres — queue,
+threads, ``run_events`` (+ ``LISTEN`` for live SSE), interrupts, and the
+checkpointer for thread history — serving every agent named by
+``--agent``/``--registry``/``--agents-dir``. Uvicorn binds the internal
+interface only.
 
-``worker`` is the §2.1 Worker row: one process serves one agent, claims
-runs from the Postgres queue (A7 — Postgres is the only gateway↔worker
-transport), drives them through the agent's runner, writes the protocol
-events to the ``run_events`` log, and records interrupts for the gateway's
-inbox. ``--metrics-port`` exposes its Prometheus metrics (§5.4).
+``worker`` serves one agent: it claims runs from the Postgres queue (Postgres
+is the only gateway↔worker transport), drives them through the agent's
+runner, writes the protocol events to the ``run_events`` log, and records
+interrupts for the gateway's inbox. ``--metrics-port`` exposes its Prometheus
+metrics.
 
-``dev`` is the D11 single-process mode on one local SQLite ``--db`` file.
-With ``--input`` it smokes one run through enqueue → claim → drive → settle
-(checkpoints on SQLite, the rest in memory); without it, it serves the full
+``dev`` is the single-process mode on one local SQLite ``--db`` file. With
+``--input`` it validates the input, runs it once through enqueue → claim →
+drive → settle, and prints every event; without it, it serves the full
 gateway *and* runs the worker loop in the same process, with runs, events,
 threads, interrupts, and checkpoints all persisted to that file
 (``vdreamer.sqlite_state``), so the REST/SSE contract works locally with no
-infrastructure and survives a restart. The testing phase runs on this mode;
-the Postgres ``serve``/``worker`` topology is the later migration. Hot
-reload (PRD §2.3's "single-process hot reload") is future work; ``dev``
-builds the agent once, like the worker.
+infrastructure and survives a restart. ``dev --reload`` restarts the process
+on source changes (:mod:`vdreamer.reload`).
 
-Both resolve the agent through :func:`vdreamer.discovery.resolve_agent` (a
-``pkg.module:agent`` spec, or a bare name via ``--registry``/``--agents-dir``,
-D2) and take connection strings from the environment only (A23).
+All three resolve agents through :func:`vdreamer.discovery.resolve_agent` (a
+``pkg.module:agent`` spec, or a bare name via ``--registry``/``--agents-dir``),
+refuse an agent that fails the static contract checks, and take connection
+strings from the environment only.
 
-``worker`` and ``dev`` (Milestone 5) read ``resources.yaml`` (``--resources``
-or ``$VDREAMER_RESOURCES``) and start its ``type: mcp`` servers at boot
-(``vdreamer.mcp``, §2.7): their tools reach the agent through
-``ctx.tools.mcp(...)``, and under ``dev`` every ``required`` server is a
-``/readyz`` probe.
+At boot, ``worker`` and ``dev`` read ``models.yaml`` (``--models`` or
+``$VDREAMER_MODELS``) and ``resources.yaml`` (``--resources`` or
+``$VDREAMER_RESOURCES``): they build the agent's declared model aliases, load
+its fastembed models once, probe the chat endpoints, open its resource
+clients (``vdreamer.backends``) and start its ``type: mcp`` servers
+(``vdreamer.mcp``), which ``build()`` receives as ``ctx.models`` /
+``ctx.resources`` / ``ctx.tools.mcp(...)``. Any failure — an unknown alias,
+an endpoint down, a missing model file or ``*_env`` variable — stops the
+process before it claims a run. Under ``dev`` every ``required`` MCP server
+is a ``/readyz`` probe.
 
-Milestone 7 adds ``models.yaml`` (``--models`` or ``$VDREAMER_MODELS``) and
-the rest of ``resources.yaml``: at boot, ``worker`` and ``dev`` build the
-agent's declared model aliases, load its fastembed models once, probe the
-chat endpoints, and open its resource clients (``vdreamer.backends``),
-which ``build()`` receives as ``ctx.models`` / ``ctx.resources``. Any
-failure — an unknown alias, an endpoint down, a missing model file or
-``*_env`` variable — stops the process before it claims a run.
-
-Milestone 9 adds the headless entry: ``serve`` and ``dev`` read
-``VDREAMER_SERVICE_TOKENS`` (A16) and ``CALLBACK_ALLOWLIST`` (A26) for
-``POST /agents/{name}/trigger``, and run the outbox dispatcher in the gateway
+``serve`` and ``dev`` also serve the headless entry: they read
+``VDREAMER_SERVICE_TOKENS`` and ``CALLBACK_ALLOWLIST`` for
+``POST /agents/{name}/trigger`` and run the outbox dispatcher in the gateway
 process. Every event writer — the gateway's and each worker's — is wrapped in
 ``OutboxEventSink``, so the callback and notification entries are recorded
 with the events (``vdreamer.outbox``).
@@ -191,7 +186,7 @@ def _install_sigint_stop(stop: asyncio.Event) -> bool:
 
     POSIX only: the proactor loop on Windows has no ``add_signal_handler``;
     there the KeyboardInterrupt fallback in the callers stops the process and
-    the in-flight row recovers through the lease sweep (§3.2).
+    the in-flight row recovers through the lease sweep.
     """
     try:
         asyncio.get_running_loop().add_signal_handler(signal.SIGINT, stop.set)
@@ -201,7 +196,7 @@ def _install_sigint_stop(stop: asyncio.Event) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# models.yaml + resources.yaml (§2.7, §3.6, §3.7)
+# models.yaml + resources.yaml
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +221,7 @@ BACKEND_ERRORS = (ModelsError, ResourcesError, ModelUnavailable, ResourceUnavail
 
 
 # ---------------------------------------------------------------------------
-# Headless trigger, outbox and callbacks (M9, A16, A26)
+# Headless trigger, outbox and callbacks
 # ---------------------------------------------------------------------------
 
 
@@ -264,7 +259,7 @@ def _outbox_settings(command: str) -> OutboxSettings | None:
 
 
 def _headless_config(command: str, tokens: tuple[str, ...]) -> HeadlessConfig | None:
-    """The gateway's M9 environment, checked against ``tokens``; ``None`` (printed) when wrong."""
+    """The gateway's environment, checked against ``tokens``; ``None`` (printed) when wrong."""
     from vdreamer.gateway import GatewaySettings
     from vdreamer.gateway.settings import (
         GatewayConfigError,
@@ -312,7 +307,7 @@ async def _open_mcp(
 async def _open_artifact_store(command: str, dsn: str) -> tuple[ArtifactStore, Any]:
     """``(store, probe)``: Postgres rows + MinIO bytes, or the unavailable store.
 
-    MinIO comes from ``VDREAMER_MINIO_*`` (A23). Without it, artifact routes
+    MinIO comes from ``VDREAMER_MINIO_*``. Without it, artifact routes
     answer ``404`` and artifact writes fail — said once at boot.
     """
     objects = MinioObjectStore.from_env()  # MinioConfigError propagates: half-configured
@@ -335,7 +330,7 @@ async def _open_artifact_store(command: str, dsn: str) -> tuple[ArtifactStore, A
 
 
 def _start_metrics_server(command: str, host: str, port: int) -> None:
-    """Expose :data:`vdreamer.metrics.REGISTRY` over HTTP (pull-only, §5.4)."""
+    """Expose :data:`vdreamer.metrics.REGISTRY` over HTTP (pull-only)."""
     from prometheus_client import start_http_server
 
     from vdreamer import metrics
@@ -432,11 +427,11 @@ def run_worker(
     resources: str | None = None,
     models: str | None = None,
 ) -> int:
-    """CLI entry point for ``vdreamer worker`` (PRD §2.1)."""
+    """CLI entry point for ``vdreamer worker``."""
     if metrics_port is not None:
         from vdreamer.gateway.settings import GatewayConfigError, validate_bind_host
 
-        try:  # refuse a wildcard bind before any store is opened (A14, §5.1)
+        try:  # refuse a wildcard bind before any store is opened
             validate_bind_host(metrics_host)
         except GatewayConfigError as exc:
             print(f"worker: {exc}", file=sys.stderr)
@@ -478,13 +473,13 @@ def run_worker(
 
 
 # ---------------------------------------------------------------------------
-# vdreamer dev (D11)
+# vdreamer dev
 # ---------------------------------------------------------------------------
 
 
 @asynccontextmanager
 async def _open_dev_checkpointer(db: str) -> AsyncIterator[AsyncSqliteSaver]:
-    """The D11 checkpointer: the agent's checkpoints on SQLite at ``db``.
+    """The checkpointer: the agent's checkpoints on SQLite at ``db``.
 
     ``AsyncSqliteSaver`` (``langgraph-checkpoint-sqlite``, a base runtime
     dependency — the ``dev`` entrypoint is core CLI) holds the file open for
@@ -501,7 +496,7 @@ async def _open_dev_checkpointer(db: str) -> AsyncIterator[AsyncSqliteSaver]:
 
 @asynccontextmanager
 async def _open_dev_store(db: str) -> AsyncIterator[Any]:
-    """The dev long-term memory store (§2.4): ``AsyncSqliteStore`` on the same file."""
+    """The dev long-term memory store: ``AsyncSqliteStore`` on the same file."""
     from langgraph.store.sqlite.aio import AsyncSqliteStore
 
     Path(db).parent.mkdir(parents=True, exist_ok=True)
@@ -522,7 +517,7 @@ async def _dev_gateway(
     headless: HeadlessConfig | None = None,
     store: Any = None,
 ) -> int:
-    """``vdreamer dev`` without ``--input``: gateway + worker loop in one process (D11).
+    """``vdreamer dev`` without ``--input``: gateway + worker loop in one process.
 
     Runs, events, threads, interrupts, outbox, and artifact metadata live in
     ``state`` — the same SQLite file as the checkpoints (artifact bytes beside
@@ -573,7 +568,7 @@ async def _dev_gateway(
         probes=mcp.probes() if mcp is not None else {},
     )
 
-    # §4.4: one process, so the sweeper is always the leader.
+    # One process, so the sweeper is always the leader.
     sweeper = InterruptSweeper(interrupts, queue, log)
     dispatcher = build_dispatcher(state.outbox, headless.outbox, headless.callback_allowlist)
 
@@ -754,7 +749,7 @@ def run_dev(
     resources: str | None = None,
     models: str | None = None,
 ) -> int:
-    """CLI entry point for ``vdreamer dev`` (D11): one process, no infrastructure."""
+    """CLI entry point for ``vdreamer dev``: one process, no infrastructure."""
     resolved = _resolve_cli_agent("dev", agent, registry, agents_dir)
     if resolved is None:
         return 1
@@ -817,7 +812,7 @@ async def _uvicorn_serve(app: FastAPI, host: str, port: int) -> None:
     """Serve ``app`` with uvicorn until it is told to stop (Ctrl-C / SIGTERM).
 
     No ``Server`` header, no proxy-header trust (the Web Backend is the only
-    caller and identity comes from its explicit headers, D13).
+    caller and identity comes from its explicit headers).
     """
     import uvicorn
 
@@ -834,7 +829,7 @@ async def _uvicorn_serve(app: FastAPI, host: str, port: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# vdreamer serve (the gateway, M4)
+# vdreamer serve (the gateway)
 # ---------------------------------------------------------------------------
 
 
@@ -848,7 +843,7 @@ def resolve_serve_agents(
     registry: str | None = None,
     agents_dir: str | None = None,
 ) -> dict[str, BaseAgent]:
-    """The agents one gateway serves (D2), keyed by ``name``.
+    """The agents one gateway serves, keyed by ``name``.
 
     ``--agent`` (repeatable) picks agents explicitly — specs, or names resolved
     against ``--registry``/``--agents-dir``. Without ``--agent``, every agent of
@@ -863,7 +858,7 @@ def resolve_serve_agents(
         if agents_dir is not None:
             loaded.extend(discover_agents_dir(agents_dir).values())
     if not loaded:
-        raise ServeAgentsError("serve needs --agent, --registry, or --agents-dir (D2)")
+        raise ServeAgentsError("serve needs --agent, --registry, or --agents-dir")
     agents: dict[str, BaseAgent] = {}
     for agent in loaded:
         problem = contract_error(agent)
@@ -884,7 +879,7 @@ async def _serve_main(
     port: int,
     headless: HeadlessConfig | None = None,
 ) -> int:
-    """The gateway process body: Postgres stores, ``LISTEN`` loop, uvicorn (§2.1)."""
+    """The gateway process body: Postgres stores, ``LISTEN`` loop, uvicorn."""
     from vdreamer.gateway import GatewayBackend, GatewaySettings, create_app
     from vdreamer.gateway.settings import strict_scopes_from_env
 
@@ -927,7 +922,7 @@ async def _serve_main(
             probes={"postgres": queue.probe, "event_listener": listener.probe, **probes},
         )
 
-        # §4.4: every replica runs a sweeper; the advisory lock elects the one that sweeps.
+        # Every replica runs a sweeper; the advisory lock elects the one that sweeps.
         sweeper = InterruptSweeper(
             interrupts, queue, writer, leader=PostgresAdvisoryLeader(dsn)
         )
@@ -972,7 +967,7 @@ def run_serve(
     host: str = "127.0.0.1",
     port: int = 8000,
 ) -> int:
-    """CLI entry point for ``vdreamer serve`` (PRD §2.1, §2.5)."""
+    """CLI entry point for ``vdreamer serve``."""
     from vdreamer.gateway.settings import GatewayConfigError, tokens_from_env, validate_bind_host
 
     try:

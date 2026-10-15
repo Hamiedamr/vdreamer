@@ -1,4 +1,4 @@
-"""Ops and contract documents (PRD §2.5): health, readiness, metrics, schemas, docs.
+"""Ops and contract documents: health, readiness, metrics, schemas, docs.
 
 ``/openapi.json`` itself is FastAPI's (``openapi_url``); everything else is
 here. All of these are :data:`~vdreamer.gateway.auth.PUBLIC_PATHS`.
@@ -26,7 +26,7 @@ router = APIRouter(prefix=API_PREFIX, tags=["ops"])
 
 Backend = Annotated[GatewayBackend, Depends(get_backend)]
 
-#: The docs page CSP (§5.2): same-origin only. Swagger UI needs inline
+#: The docs page CSP: same-origin only. Swagger UI needs inline
 #: *styles* (React style attributes), never inline scripts — the init code
 #: is a same-origin file — and ``connect-src 'self'`` lets it load the
 #: OpenAPI document and nothing else.
@@ -70,7 +70,7 @@ async def readyz(backend: Backend) -> Any:
     responses={200: {"content": {metrics.CONTENT_TYPE: {}}}},
 )
 async def prometheus_metrics(backend: Backend) -> Response:
-    """Prometheus text exposition (§5.4); queue depth is refreshed per scrape."""
+    """Prometheus text exposition; queue depth is refreshed per scrape."""
     try:
         counts = await backend.queue.count_by_status()
     except Exception:  # a scrape must not fail because the queue is briefly down
@@ -83,12 +83,12 @@ async def prometheus_metrics(backend: Backend) -> Response:
 
 @router.get("/protocol/schema.json")
 async def protocol_schema() -> JSONResponse:
-    """The protocol v1.0 event JSON Schema (§3.3, §6.1)."""
+    """The protocol v1.0 event JSON Schema."""
     return JSONResponse(event_json_schema())
 
 
 @router.get("/docs", response_class=HTMLResponse, include_in_schema=False)
 async def docs() -> HTMLResponse:
-    """Swagger UI from vendored assets only (§5.2, A13), under :data:`DOCS_CSP`."""
+    """Swagger UI from vendored assets only, under :data:`DOCS_CSP`."""
     html = (STATIC_DIR / "vdreamer" / "docs.html").read_text(encoding="utf-8")
     return HTMLResponse(html, headers={"Content-Security-Policy": DOCS_CSP})

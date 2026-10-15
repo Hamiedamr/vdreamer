@@ -1,4 +1,4 @@
-"""The one error body (PRD §2.5): ``{error: {code, message, details?}}``.
+"""The one error body: ``{error: {code, message, details?}}``.
 
 Every non-2xx response the gateway produces — its own checks, FastAPI's
 request validation, Starlette's routing 404/405, an unhandled exception —
@@ -24,7 +24,7 @@ _log = logging.getLogger(__name__)
 
 
 class ErrorCode(enum.StrEnum):
-    """Stable error codes (PRD §2.5: "stable codes (e.g., ``run_conflict``)")."""
+    """Stable error codes ("stable codes (e.g., ``run_conflict``)")."""
 
     # 400
     MISSING_IDENTITY = "missing_identity"
@@ -136,7 +136,7 @@ async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
-    # The message never echoes the exception: internals stay in the log (§5.4).
+    # The message never echoes the exception: internals stay in the log.
     _log.exception("unhandled error serving %s %s", request.method, request.url.path)
     return error_response(500, ErrorCode.INTERNAL_ERROR, "internal server error")
 

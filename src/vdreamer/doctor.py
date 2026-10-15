@@ -1,39 +1,30 @@
 """``vdreamer doctor --offline`` — environment probe and zero-egress assertion.
 
-Milestone 0 scope (PRD §2.3, §5.2): force the offline environment variables,
-report interpreter and LangChain/LangGraph versions, import the stack under
-a socket-level egress guard, and assert nothing tried to reach the network.
-The VM network policy is the authoritative control (A40); this guard is
-defense in depth and the thing this command asserts against. Backend,
-model-file, MCP-server, and sandbox probes land with their milestones.
+It reports the interpreter and LangChain/LangGraph versions, imports the
+whole stack (gateway, governance, MCP, models, artifacts, sandbox, and every
+installed extra) under a socket-level egress guard, and asserts nothing
+tried to reach the network. The VM network policy is the authoritative
+control; this guard is defense in depth and the thing this command asserts
+against.
 
-Milestone 4 adds the gateway stack (FastAPI, uvicorn, prometheus-client) to
-the guarded imports and the vendored-asset check (§5.2, A13): every file
-under ``static/vendor/`` must match its pinned sha256 and the docs shell must
-reference no external origin (``vdreamer.vendored``).
+It also checks:
 
-Milestone 6 adds the artifact/files/sandbox stack to the guarded imports
-(pyarrow, xlsxwriter and the MinIO client too, when their extras are
-installed), the vendored chart JS to the asset check, and a sandbox probe:
-a trivial program through ``vdreamer.sandbox`` under its rlimits, reporting
-whether the network namespace and the dedicated uid took. Windows hosts
-report the sandbox as unavailable (D19) without failing.
-
-Milestone 7 adds the backend probes (§2.3 "probes all backends, model
-files, MCP servers"), run after the egress assertion against the declared
-endpoints only: every ``models.yaml`` alias (``--models`` or
-``$VDREAMER_MODELS``) — a chat endpoint must answer and serve its model, a
-fastembed model's files must be in the cache (located, not loaded) — and
-every ``resources.yaml`` entry (``--resources`` or ``$VDREAMER_RESOURCES``):
-each resource connects and passes its probe, each MCP server starts (a
-``required`` one that does not is a failure). ``langchain_openai``,
-``langchain_ollama`` and fastembed join the guarded imports.
-
-Milestone 10 moves the forced variables to :mod:`vdreamer.offline` (every
-command applies them now, not only ``doctor``; the list grew the telemetry
-switches) and reports the tiktoken cache: a ``TIKTOKEN_CACHE_DIR`` that is
-set but missing or empty fails; unset (with tiktoken installed) is a warning,
-since only token counting would reach for it.
+- the offline environment variables (:mod:`vdreamer.offline`) and the
+  tiktoken cache: a ``TIKTOKEN_CACHE_DIR`` that is set but missing or empty
+  fails; unset (with tiktoken installed) is a warning, since only token
+  counting would reach for it;
+- the vendored assets: every file under ``static/vendor/`` matches its pinned
+  sha256 and the docs shell references no external origin
+  (``vdreamer.vendored``);
+- the sandbox: a trivial program under its rlimits, reporting whether the
+  network namespace and the dedicated uid took (Windows hosts report it as
+  unavailable without failing);
+- the declared backends, after the egress assertion and against those
+  endpoints only: every ``models.yaml`` alias (a chat endpoint must answer and
+  serve its model, a fastembed model's files must be in the cache — located,
+  not loaded) and every ``resources.yaml`` entry (each resource connects and
+  passes its probe; each MCP server starts, and a ``required`` one that does
+  not is a failure).
 """
 
 from __future__ import annotations
@@ -53,7 +44,7 @@ from vdreamer.offline import (
     tiktoken_cache_problem,
 )
 
-#: Reported in the version block (PRD §2.3: LangChain/LangGraph versions).
+#: Reported in the version block (LangChain/LangGraph versions).
 VERSION_PACKAGES: tuple[str, ...] = (
     "langchain",
     "langgraph",
@@ -72,11 +63,11 @@ class EgressBlockedError(OSError):
 
 
 class EgressGuard:
-    """Record and block outbound socket calls while installed (§5.2, A40).
+    """Record and block outbound socket calls while installed.
 
     Blocks the client-side paths (``connect``/``connect_ex`` on sockets,
     ``create_connection``, ``getaddrinfo``). Loopback-only usage is not
-    exempted: Milestone 0 probes nothing, so any socket call is a violation.
+    exempted: probes nothing, so any socket call is a violation.
     """
 
     def __init__(self) -> None:
@@ -129,7 +120,7 @@ def _report_versions() -> None:
 
 
 def _probe_sandbox() -> str | None:
-    """Run ``print(42)`` in the sandbox (§2.3 "probes … sandbox"); the problem, or ``None``."""
+    """Run ``print(42)`` in the sandbox ; the problem, or ``None``."""
     import asyncio
     import sys as _sys
 
@@ -228,21 +219,21 @@ def run_offline(models: str | None = None, resources: str | None = None) -> int:
             import langgraph.checkpoint.postgres  # noqa: F401
         except ImportError as exc:
             # psycopg needs libpq: the [postgres] extra ships it (psycopg[binary]),
-            # else the host's. Only serve/worker need it; dev runs on SQLite (D11).
+            # else the host's. Only serve/worker need it; dev runs on SQLite.
             postgres_note = (
                 f"postgres: unavailable ({type(exc).__name__}: {str(exc).splitlines()[0]}); "
                 "serve/worker need `vdreamer[postgres]` or a system libpq, dev does not"
             )
 
         import vdreamer.gateway  # noqa: F401 — FastAPI app factory + routes
-        import vdreamer.governance  # noqa: F401 — the governed tool pipeline (M5)
+        import vdreamer.governance  # noqa: F401 — the governed tool pipeline
         import vdreamer.mcp  # noqa: F401
         if importlib.util.find_spec("fastmcp") is not None:
             from vdreamer.mcp import _import_adapter
 
-            _import_adapter()  # langchain.mcp + FastMCP (the mcp extra), M5
-        import vdreamer.adapters  # noqa: F401 — models and resources (M7)
-        import vdreamer.files  # noqa: F401 — artifacts, files, sandbox (M6)
+            _import_adapter()  # langchain.mcp + FastMCP (the mcp extra)
+        import vdreamer.adapters  # noqa: F401 — models and resources
+        import vdreamer.files  # noqa: F401 — artifacts, files, sandbox
         import vdreamer.models  # noqa: F401 — langchain_openai + langchain_ollama
         import vdreamer.sandbox  # noqa: F401
         import vdreamer.tables  # noqa: F401

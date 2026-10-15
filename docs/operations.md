@@ -1,6 +1,6 @@
 # Operating vdreamer air-gapped
 
-How a release gets from a connected build host onto the air-gapped VMs of the reference topology (PRD §5.1), and what each process needs there. Operators use standard `pip`; uv is only the dev-side toolchain and never appears on a target host.
+How a release gets from a connected build host onto the air-gapped VMs of the reference topology, and what each process needs there. Operators use standard `pip`; uv is only the dev-side toolchain and never appears on a target host.
 
 ## 1. What a release ships
 
@@ -74,42 +74,42 @@ docker run vdreamer:<ver> migrate
 - **Offline environment:** the offline variables are baked in as `ENV`, and the tiktoken encodings are baked into `/opt/vdreamer/tiktoken`.
 - **Agent code:** derive an image (`FROM vdreamer:<ver>`, then `pip install --no-index` from your own wheelhouse) or mount it and set `PYTHONPATH`.
 - **fastembed models:** mount `fastembed/` read-only at `/opt/vdreamer/models` and set `fastembed.cache_dir: /opt/vdreamer/models` in `models.yaml`.
-- **Sandbox (D19):** the image has a `vdreamer-sandbox` user (uid 10002). For a dedicated sandbox uid, run the worker container as root with `VDREAMER_SANDBOX_UID=10002`.
+- **Sandbox:** the image has a `vdreamer-sandbox` user (uid 10002). For a dedicated sandbox uid, run the worker container as root with `VDREAMER_SANDBOX_UID=10002`.
 
 ## 5. Processes and topology
 
-| Process | Host (§5.1) | Needs |
+| Process | Host | Needs |
 |---|---|---|
 | `vdreamer migrate` | once per release | Postgres (`VDREAMER_PG_DSN`), MinIO env to create the bucket |
 | `vdreamer serve` | VM-GW, N replicas | Postgres, MinIO, `VDREAMER_INTERNAL_TOKEN`; binds the internal interface only (`--host`, wildcards refused) |
 | `vdreamer worker --agent X` | VM-WRK, ≥1 per agent | Postgres, MinIO, `models.yaml`, `resources.yaml`, model servers and resources |
 
-The gateway and the workers talk through Postgres only (A7). Only workers reach model servers, MinIO writes and agent resources.
+The gateway and the workers talk through Postgres only. Only workers reach model servers, MinIO writes and agent resources.
 
 ## 6. Environment reference
 
-All configuration is environment variables. YAML files name secrets through `*_env` keys and never hold them (A23).
+All configuration is environment variables. YAML files name secrets through `*_env` keys and never hold them. Every `vdreamer` command also reads a `.env` file from its working directory (or the file `--env-file PATH` names) when there is one; variables already in the environment win, and the zero-egress switches below are forced afterwards, so a `.env` cannot turn them off.
 
 | Variable | Used by | Meaning |
 |---|---|---|
 | `VDREAMER_PG_DSN` | serve, worker, migrate | Postgres connection string |
-| `VDREAMER_INTERNAL_TOKEN` (+ `_PREVIOUS`) | serve, dev | the Web Backend's bearer token (two valid during rotation, A14) |
-| `VDREAMER_SERVICE_TOKENS` | serve, dev | `name:token,...`: upstream services allowed to call `/trigger` (A16) |
-| `CALLBACK_ALLOWLIST` | serve, dev | where `/trigger` callbacks may go: host globs and CIDRs (A26) |
+| `VDREAMER_INTERNAL_TOKEN` (+ `_PREVIOUS`) | serve, dev | the Web Backend's bearer token (two valid during rotation) |
+| `VDREAMER_SERVICE_TOKENS` | serve, dev | `name:token,...`: upstream services allowed to call `/trigger` |
+| `CALLBACK_ALLOWLIST` | serve, dev | where `/trigger` callbacks may go: host globs and CIDRs |
 | `VDREAMER_OUTBOX_WEBHOOK_URL`, `VDREAMER_OUTBOX_SECRET` | serve, worker, dev | interrupt notifications (HMAC-signed webhook) |
 | `WEB_BASE_URL` | serve, worker, dev | deep link base: `{WEB_BASE_URL}/review/{interrupt_id}` |
 | `VDREAMER_SMTP_HOST`/`_PORT`/`_FROM`/`_TO`/`_USER`/`_PASSWORD`/`_STARTTLS` | serve, worker, dev | interrupt notifications by email |
-| `HITL_STRICT_SCOPES` | serve, dev | four-eyes scope patterns (A32) |
-| `NETWORK_ALLOWLIST` | worker, validate, doctor | every declared endpoint must match (A40) |
+| `HITL_STRICT_SCOPES` | serve, dev | four-eyes scope patterns |
+| `NETWORK_ALLOWLIST` | worker, validate, doctor | every declared endpoint must match |
 | `VDREAMER_MODELS`, `VDREAMER_RESOURCES` | worker, dev, validate, doctor | default `models.yaml` / `resources.yaml` paths |
 | `VDREAMER_MINIO_ENDPOINT`/`_ACCESS_KEY`/`_SECRET_KEY`/`_BUCKET`/`_SECURE` | serve, worker, migrate | artifact bytes |
-| `VDREAMER_SANDBOX_UID`/`_GID`/`_ROOT` | worker | sandbox identity and scratch root (D19) |
-| `TIKTOKEN_CACHE_DIR` | worker | the bundled tiktoken encodings (§5.2) |
-| `VDREAMER_STREAM_DRIVER` | worker, dev | `v2` (default) or `v3` (A31) |
+| `VDREAMER_SANDBOX_UID`/`_GID`/`_ROOT` | worker | sandbox identity and scratch root |
+| `TIKTOKEN_CACHE_DIR` | worker | the bundled tiktoken encodings |
+| `VDREAMER_STREAM_DRIVER` | worker, dev | `v2` (default) or `v3` |
 
-Every vdreamer command except `bundle` forces `LANGSMITH_TRACING=false`, `LANGCHAIN_TRACING_V2=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1`, `FASTMCP_CHECK_FOR_UPDATES=off` and `DO_NOT_TRACK=1` (§5.2).
+Every vdreamer command except `bundle` forces `LANGSMITH_TRACING=false`, `LANGCHAIN_TRACING_V2=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1`, `FASTMCP_CHECK_FOR_UPDATES=off` and `DO_NOT_TRACK=1`.
 
-## 7. vLLM prerequisites (A21)
+## 7. vLLM prerequisites
 
 vdreamer talks to vLLM through its OpenAI-compatible API and relies on vLLM for tool calling and reasoning. Start each served model with:
 
@@ -131,4 +131,4 @@ vllm serve Qwen/Qwen3-32B --enable-auto-tool-choice --tool-call-parser hermes \
 3. Run `vdreamer migrate`. Every step is idempotent and upgrades tables in place.
 4. Restart the workers, then the gateways.
 
-A `langchain`/`langgraph` 2.0 always comes with a vdreamer major version (A41).
+A `langchain`/`langgraph` 2.0 always comes with a vdreamer major version.

@@ -1,4 +1,4 @@
-"""SQLite-backed gateway/worker state for ``vdreamer dev`` (D11, testing phase).
+"""SQLite-backed gateway/worker state for ``vdreamer dev`` (testing phase).
 
 The testing version runs on SQLite instead of Postgres: one ``vdreamer dev``
 process (gateway + worker) keeps its runs, event log, threads, and interrupt
@@ -13,10 +13,10 @@ in-memory dict is the source of truth while the process runs, SQLite is what
 the next process loads. The event log is append-only and read straight from
 SQLite, so a long history never has to fit in memory.
 
-Artifacts (§3.4) keep their metadata row in ``vdreamer_artifacts`` and their
-bytes on the local filesystem next to the database (D11: "a local filesystem
+Artifacts keep their metadata row in ``vdreamer_artifacts`` and their
+bytes on the local filesystem next to the database ("a local filesystem
 store"), at ``artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}`` — MinIO's
-key layout. Bytes are written before the row (D7). Inbound files sit under
+key layout. Bytes are written before the row. Inbound files sit under
 ``inputs/`` in the same directory.
 """
 
@@ -180,7 +180,7 @@ class SqliteRunQueue(InMemoryRunQueue):
 
         One process owns the file, so a run still ``running`` here belonged to
         the previous process: its lease is marked lapsed, and the worker's boot
-        recovery sweep (§3.2) requeues it — or expires it after MAX_ATTEMPTS.
+        recovery sweep requeues it — or expires it after MAX_ATTEMPTS.
         """
         for data in await _load(self._db, self._TABLE):
             record = _run_from(data)
@@ -324,7 +324,7 @@ class SqliteOutboxStore(InMemoryOutboxStore):
 
 
 class SqliteEventLog(EventSink, EventReader):
-    """The shared dev event log on ``vdreamer_run_events`` (the A3 replay source).
+    """The shared dev event log on ``vdreamer_run_events`` (the replay source).
 
     Like ``InMemoryEventLog``: one instance is every run's sink and the
     gateway's reader, ``write`` allocates ``seq`` (a recovered attempt's driver
@@ -375,7 +375,7 @@ class SqliteEventLog(EventSink, EventReader):
 
 
 class SqliteArtifactStore(ArtifactStore):
-    """Dev artifacts: rows in ``vdreamer_artifacts``, bytes under ``root`` (D7, D11).
+    """Dev artifacts: rows in ``vdreamer_artifacts``, bytes under ``root``.
 
     ``root`` is the object root (the ``.db`` file's directory by default), so
     the bytes land at ``root/artifacts/{thread_id}/{run_id}/{artifact_id}.{ext}``
