@@ -57,7 +57,10 @@ def test_approval_round_trip_through_the_api(live: TestClient, live_stack: Stack
     final = wait_for_status(live, run_id, "completed")
     assert final["attempt"] == 2  # the resume consumed a fresh claim
     thread = live.get(f"/api/v1/threads/{thread_id}", headers=headers()).json()
-    assert thread["values"]["decision"] == {"action": "edit", "payload": {"draft": "draft-2"}}
+    # The graph also learns who decided (§4.5); the stored resolution stays what was sent.
+    assert thread["values"]["decision"] == {
+        "action": "edit", "payload": {"draft": "draft-2"}, "resolved_by": "alice"
+    }
 
     _, frames = read_sse(live, f"/api/v1/runs/{run_id}/events")
     events = events_of(frames)
@@ -162,7 +165,7 @@ def test_role_gated_interrupts_go_to_the_role(client: TestClient, stack: Stack) 
     assert response.status_code == 200
     run = asyncio.run(stack.queue.get(record.run_id))
     assert run is not None and run.status is RunState.QUEUED
-    assert run.resume == {record.interrupt_id: {"action": "approve"}}
+    assert run.resume == {record.interrupt_id: {"action": "approve", "resolved_by": "dana"}}
 
 
 def test_stale_version_is_409(client: TestClient, stack: Stack) -> None:
@@ -286,7 +289,7 @@ def test_resume_waits_for_every_pending_interrupt(client: TestClient, stack: Sta
     run = asyncio.run(stack.queue.get(first.run_id))
     assert run is not None and run.status is RunState.QUEUED
     assert run.resume == {
-        first.interrupt_id: {"action": "approve"},
+        first.interrupt_id: {"action": "approve", "resolved_by": "alice"},
         "int_second": "ok",  # a raw interrupt() resumes with the answer verbatim (§4.5)
     }
 

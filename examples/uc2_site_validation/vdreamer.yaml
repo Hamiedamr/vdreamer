@@ -1,0 +1,2 @@
+agents:
+  site-validation: site_validation.agent:agent

@@ -1,0 +1,9 @@
+# The VLM alias (§3.6): an OpenAI-compatible vision model on vLLM.
+aliases:
+  vlm:
+    provider: vllm
+    base_url: http://10.20.0.6:8000/v1
+    model: qwen2.5-vl-7b
+    api_key_env: VLLM_API_KEY
+    modalities: [text, image]
+    temperature: 0

@@ -4,7 +4,7 @@ A Python SDK + CLI that serves developer-written `BaseAgent` subclasses — Lang
 
 ## Status
 
-Pre-1.0 (`0.1.0`). Milestones 0–11 are **complete** (`docs/tasks.md`): the `BaseAgent` developer contract; protocol v1.0 with the v2/v3 stream drivers; the run queue with workers and crash recovery; the FastAPI REST/SSE gateway under `/api/v1`; the governed tool pipeline + MCP; artifacts, files and the sandbox; models and resources; the full HITL pipeline (all four interrupt sources through one endpoint); the headless `/trigger` entry with the outbox (signed callbacks and interrupt notifications); the air-gap packaging (`export-schema`, `bundle`, the OCI image, zero-egress runtime settings); and the client contract (the conformance kit, `docs/protocol.md`) with the `vdreamer run` terminal client. Still to come: the UC1–UC3 reference agents (M12).
+Pre-1.0 (`0.1.0`). Milestones 0–12 are **complete** — **P0 complete** (`docs/tasks.md`): the `BaseAgent` developer contract; protocol v1.0 with the v2/v3 stream drivers; the run queue with workers and crash recovery; the FastAPI REST/SSE gateway under `/api/v1`; the governed tool pipeline + MCP; artifacts, files and the sandbox; models and resources; the full HITL pipeline (all four interrupt sources through one endpoint); the headless `/trigger` entry with the outbox (signed callbacks and interrupt notifications); the air-gap packaging (`export-schema`, `bundle`, the OCI image, zero-egress runtime settings); the client contract (the conformance kit, `docs/protocol.md`) with the `vdreamer run` terminal client; and the UC1–UC3 reference agents in `examples/`, which are the §7.3 acceptance test — they build on the public API only, and `tests/acceptance` drives all three end to end through a real gateway with `vdreamer run`.
 
 Client teams: see `docs/protocol.md` and the conformance kit (`vdreamer export-schema` → `conformance/`). Operators: see `docs/operations.md` for the air-gapped install (`vdreamer bundle` → `pip install --no-index --require-hashes`), the image, and the environment reference.
 
@@ -28,6 +28,7 @@ uv run vdreamer doctor --offline      # asserts zero egress
 uv run vdreamer export-schema --out vdreamer-schema   # OpenAPI 3.1, event schema, TS types
 uv run pytest tests/packaging         # Milestone 10: export-schema, bundle, offline env, reload
 uv run pytest tests/conformance tests/client   # Milestone 11: the kit vs the reference fold; vdreamer run
+uv run pytest tests/acceptance        # Milestone 12: UC1–UC3 end to end (the §7.3 acceptance test)
 ```
 
 To try the gateway locally with no infrastructure, run `vdreamer dev` without `--input` (add `--reload` to restart on source changes): it serves `/api/v1` (docs at `/api/v1/docs`) and runs the worker in the same process, keeping runs, events, threads, approvals and checkpoints in one SQLite file (`--db`, default `./.vdreamer/dev.db`), so a restart picks up where it stopped. The current testing phase runs on this mode; the Postgres topology below comes later. It uses `VDREAMER_INTERNAL_TOKEN`, or prints a one-off token:
@@ -63,6 +64,7 @@ For `validate pinger:agent`, make `examples/smoke/` importable first: bash `PYTH
 
 - `src/vdreamer/` — the package: `cli`, `agents` (`BaseAgent` contract), `context` (run context + helpers), `runtime` (`AgentRunner`), `tools` (policies + `@vdreamer.tool`), `discovery`, `persistence`, `validate`, `doctor`; `events`/`streaming`/`eventlog` (protocol + drivers + event log); `queue`/`worker`/`entrypoints`/`migrate` (runs and processes); `gateway/` (the FastAPI REST/SSE app and its vendored static assets: Swagger UI, plotly.js), `threads`, `interrupts`, `metrics`, `protocol_schema`, `vendored`; `governance`/`mcp`/`resources` (tools); `artifacts`/`artifact_data`/`objects`/`tables`/`files`/`sandbox` (artifacts, files, sandbox); `models`/`adapters`/`backends`/`network` (models and resources).
 - `tests/` — pytest suite per area: `contract/` (M1), `golden/` + `streaming/` + `protocol/` (M2), `queue/` + `worker/` (M3), `api/` (M4), `tools/` (M5), `artifacts/` (M6), `models/` (M7), plus CLI, validate, doctor.
-- `examples/smoke/` — `pinger.py`, the Milestone-0 smoke agent the CI matrix runs (the UC1–UC3 reference agents land with Milestone 12).
+- `examples/smoke/` — `pinger.py`, the Milestone-0 smoke agent the CI matrix runs.
+- `examples/uc1_sql_analyst/`, `examples/uc2_site_validation/`, `examples/uc3_pdf_research/` — the UC1–UC3 reference agents (§7.3): SQL analysis with a reviewed query and a four-eyes write path; headless telecom site validation (ZIP → VLM → MCP → approved verdict → callback); and multi-document research with hybrid retrieval and citations, in English and Arabic. Each is a uv workspace member with a plain `pyproject.toml`, and each has its own README.
 - `docs/` — `PRD.md` (the spec), `tasks.md` (the milestone plan).
 - Root: `AGENTS.md`, `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`.

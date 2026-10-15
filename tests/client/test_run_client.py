@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import socket
 import sys
 import threading
@@ -184,6 +185,45 @@ def test_reattach_to_a_waiting_run(gateway_url: str, monkeypatch: pytest.MonkeyP
     assert code == 0, out
     assert f"[reattaching to {run_id} on {thread_id}]" in out
     assert "[run completed]" in out
+
+
+def test_a_finished_thread_replays_or_takes_a_new_message(
+    gateway_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, out, _ = _run(gateway_url, monkeypatch, agent="echo", message="first",
+                        field_name="text", once=True)
+    assert code == 0, out
+    thread_id = re.search(r"\[thread (thread_[0-9a-f]+)\]", out)
+    assert thread_id, out
+    code, out, _ = _run(gateway_url, monkeypatch, agent="echo", thread=thread_id.group(1),
+                        once=True)
+    assert code == 0 and "[replaying run_" in out, out  # no message: show the last run
+    code, out, _ = _run(gateway_url, monkeypatch, agent="echo", thread=thread_id.group(1),
+                        message="second", field_name="text", once=True)
+    assert code == 0, out
+    assert "[replaying" not in out and out.count("[run completed]") == 1  # a new turn
+
+
+def test_an_approver_decides_from_the_inbox(
+    gateway_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, out, _ = _run(
+        gateway_url, monkeypatch,
+        agent="sitecheck", input_json=json.dumps({"site_id": "S-9"}), service=True,
+        token_env="SVC_TOKEN", user=None, idempotency_key="mail-9",
+    )
+    assert code == 3, out  # a service cannot approve: it detaches
+    code, out, _ = _run(gateway_url, monkeypatch, agent="sitecheck", user="eve", inbox=True)
+    assert code == 0 and "[no pending interrupts for sitecheck]" in out, out
+    # Every pending sitecheck run (earlier tests in this module leave one too).
+    code, out, script = _run(gateway_url, monkeypatch, *["approve"] * 4, agent="sitecheck",
+                             user="sam", roles=("site_approver",), inbox=True)
+    assert code == 0, out
+    assert "[run run_" in out and "interrupt site_verdict (" in out  # the inbox record
+    assert any("action [" in prompt for prompt in script.prompts)
+    code, out, _ = _run(gateway_url, monkeypatch, agent="sitecheck", user="sam",
+                        roles=("site_approver",), inbox=True)
+    assert "[no pending interrupts for sitecheck]" in out, out
 
 
 def test_a_missing_token_or_agent(gateway_url: str, monkeypatch: pytest.MonkeyPatch) -> None:

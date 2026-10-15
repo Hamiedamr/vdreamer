@@ -1,0 +1,21 @@
+{
+  "CAI-0042": {
+    "name": "Cairo Nasr City rooftop",
+    "lat": 30.0561,
+    "lon": 31.3302,
+    "sectors": [
+      {"sector": "A", "azimuth": 0, "antennas": 2},
+      {"sector": "B", "azimuth": 120, "antennas": 2},
+      {"sector": "C", "azimuth": 240, "antennas": 2}
+    ]
+  },
+  "ALX-0007": {
+    "name": "Alexandria Corniche mast",
+    "lat": 31.2156,
+    "lon": 29.9553,
+    "sectors": [
+      {"sector": "A", "azimuth": 30, "antennas": 3},
+      {"sector": "B", "azimuth": 210, "antennas": 3}
+    ]
+  }
+}

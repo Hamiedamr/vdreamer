@@ -1,0 +1,4 @@
+# Developer workstation: an embedded Qdrant on disk (no server needed).
+vectors:
+  type: qdrant
+  path: ./qdrant-data

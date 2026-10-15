@@ -1,0 +1,9 @@
+# The analyst model alias (§3.6). Production: a vLLM endpoint inside the network.
+aliases:
+  analyst:
+    provider: vllm
+    base_url: http://10.20.0.5:8000/v1
+    model: qwen3-32b
+    api_key_env: VLLM_API_KEY
+    thinking: reasoning_content
+    temperature: 0

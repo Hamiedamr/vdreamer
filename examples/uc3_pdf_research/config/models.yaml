@@ -1,0 +1,23 @@
+# Chat + the fastembed aliases (§3.6, A36). fastembed loads from the vendored cache only:
+# `vdreamer bundle --models config/models.yaml` fills it on a connected host.
+aliases:
+  reasoner:
+    provider: vllm
+    base_url: http://10.20.0.5:8000/v1
+    model: qwen3-32b
+    api_key_env: VLLM_API_KEY
+    thinking: reasoning_content
+  dense:
+    provider: fastembed
+    kind: embedding
+    model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  sparse:
+    provider: fastembed
+    kind: sparse
+    model: Qdrant/bm25
+  rerank:
+    provider: fastembed
+    kind: rerank
+    model: jinaai/jina-reranker-v2-base-multilingual
+fastembed:
+  cache_dir: /opt/vdreamer/models

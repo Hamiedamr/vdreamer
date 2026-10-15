@@ -323,6 +323,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--idempotency-key", metavar="KEY", default=None)
     run_parser.add_argument("--callback", metavar="URL", default=None, help="/trigger callback")
+    run_parser.add_argument(
+        "--inbox",
+        action="store_true",
+        help="resolve this agent's pending interrupts you may decide (approvers)",
+    )
     run_parser.add_argument("--once", action="store_true", help="exit after one run")
     run_parser.add_argument("--no-color", action="store_true", help="plain output")
 
@@ -536,6 +541,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 field_name=args.field,
                 trigger=args.trigger,
                 service=args.service,
+                inbox=args.inbox,
                 idempotency_key=args.idempotency_key,
                 callback=args.callback,
                 once=args.once,

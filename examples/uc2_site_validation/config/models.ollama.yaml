@@ -1,0 +1,9 @@
+# Developer workstation: Gemma 4 31B in Ollama (vision). `gemma4:31b-cloud` runs on
+# ollama.com (egress); `ollama pull gemma4:31b` and use `gemma4:31b` to keep it local.
+aliases:
+  vlm:
+    provider: ollama
+    base_url: http://127.0.0.1:11434
+    model: gemma4:31b-cloud
+    modalities: [text, image]
+    temperature: 0

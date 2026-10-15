@@ -1,0 +1,4 @@
+vectors:
+  type: qdrant
+  url: http://10.20.0.11:6333
+  api_key_env: QDRANT_API_KEY

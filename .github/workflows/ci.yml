@@ -5,8 +5,9 @@
 #                      full test suite. Also proves `uv sync --locked --extra postgres`
 #                      works from a clean checkout (Milestone-0 exit criterion).
 #   floor           — `uv lock --resolution lowest-direct` (NOT committed): smoke
-#                      tests against the minimum langchain/langgraph versions (A41).
-#   latest          — `uv lock --upgrade` (NOT committed): smoke tests against the
+#                      tests and the UC1–UC3 reference agents (tests/acceptance)
+#                      against the minimum langchain/langgraph versions (A41).
+#   latest          — `uv lock --upgrade` (NOT committed): the same against the
 #                      latest 1.x minor.
 #   uv-independence  — the product scope: `uv build` a wheel, install it into a clean
 #                      `python -m venv` with plain `pip`, and run the CLI. vdreamer
@@ -79,6 +80,8 @@ jobs:
         run: uv run --frozen python -c "from importlib import metadata; print('langchain', metadata.version('langchain')); print('langgraph', metadata.version('langgraph'))"
       - name: Smoke-test the agent contract on the floor
         run: uv run --frozen pytest -m smoke
+      - name: Reference agents UC1–UC3 on the floor (§7.3 acceptance)
+        run: uv run --frozen pytest tests/acceptance
 
   latest:
     name: latest (upgrade, A41)
@@ -99,6 +102,8 @@ jobs:
         run: uv run --frozen python -c "from importlib import metadata; print('langchain', metadata.version('langchain')); print('langgraph', metadata.version('langgraph'))"
       - name: Smoke-test the agent contract on the latest pins
         run: uv run --frozen pytest -m smoke
+      - name: Reference agents UC1–UC3 on the latest pins (§7.3 acceptance)
+        run: uv run --frozen pytest tests/acceptance
 
   uv-independence:
     name: plain-pip install (product scope)

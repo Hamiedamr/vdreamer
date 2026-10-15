@@ -1,0 +1,6 @@
+# The site-inventory MCP server (A39). stdio commands must be absolute paths to
+# preinstalled binaries (§5.2): point `command` at the worker venv's console script.
+siteinv:
+  type: mcp
+  command: /opt/vdreamer/venv/bin/site-inventory-mcp
+  startup: required

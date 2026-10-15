@@ -439,24 +439,40 @@ Also verified:
 
 **Goal:** UC1–UC3 in `examples/`, which are the acceptance test (§7.3). Core is P0-complete only when these build **without touching vdreamer internals**.
 
-**UC1 SQL & Data Analysis (Chat)**
-- [ ] `schema_link` (Cypher via `ctx.resources["semantic"]`) → `generate_sql` → `dry_run` (EXPLAIN) → `ApprovalGate(kind="sql_review", lineage)` → execute on `ctx.resources["warehouse"]` → `table` artifact → sandboxed chart → composite `html`.
-- [ ] Non-SELECT statements add `approver_role` + `db:write` scope. Exercises the `edit` action.
+**UC1 SQL & Data Analysis (Chat)** — `examples/uc1_sql_analyst`, `SqlAnalystAgent`
+- [x] `schema_link` (Cypher via `ctx.resources["semantic"]`) → `generate_sql` → `dry_run` (EXPLAIN) → `ApprovalGate(kind="sql_review", lineage)` → execute on `ctx.resources["warehouse"]` → `table` artifact → sandboxed chart → composite `html`. (Two compiled gates, read and write; `prepare=dry_run` runs `EXPLAIN [QUERY PLAN]`; the chart is matplotlib in `ctx.sandbox.arun`, and a `SandboxUnavailable` host logs "chart skipped" and still emits the table + report.)
+- [x] Non-SELECT statements add `approver_role` + `db:write` scope. Exercises the `edit` action. (The write gate carries `approver_role="dba"` + `scope="db:write:warehouse"`; `edit_schema=SqlEdit`, and `feedback` routes back through `generate_sql`.)
 
-**UC2 Telecom Site Validation (Headless)**
-- [ ] ZIP upload → `/trigger` with `package: FileRef` → `safe_extract` → VLM inspection + MCP site-inventory tools → `json` verdict (`renderer="verdict.v1"`) → `ApprovalGate(approver_role="site_approver")` → callback.
+**UC2 Telecom Site Validation (Headless)** — `examples/uc2_site_validation`, `SiteValidationAgent`
+- [x] ZIP upload → `/trigger` with `package: FileRef` → `safe_extract` → VLM inspection + MCP site-inventory tools → `json` verdict (`renderer="verdict.v1"`) → `ApprovalGate(approver_role="site_approver")` → callback. (`inventory_server.py` is a real FastMCP stdio server — `get_site` read, `record_validation` a `side_effects=True` write.)
 
-**UC3 Multi-PDF Research (Chat + Headless, EN + AR)**
-- [ ] Ingest agent: sandbox parse → page-offset chunks → dense + sparse → Qdrant upsert.
-- [ ] Chat agent (`create_agent`): hybrid `query_points` RRF → rerank → answer → `emit_citation` per chunk → comparison `table`.
-- [ ] Exercises the fastembed aliases, `ctx.resources["vectors"]`, and `thinking.delta`.
+**UC3 Multi-PDF Research (Chat + Headless, EN + AR)** — `examples/uc3_pdf_research`
+- [x] Ingest agent: sandbox parse → page-offset chunks → dense + sparse → Qdrant upsert. (`pypdf` runs *inside* `ctx.sandbox.arun`; because sandbox stdout is capped at 64 KB, the parser returns pages in zlib+base64 batches and the node loops until it has every page. Point ids are `uuid5`, so re-ingesting a document overwrites rather than duplicates.)
+- [x] Chat agent (`create_agent`): hybrid `query_points` RRF → rerank → answer → `emit_citation` per chunk → comparison `table`. (`CitationMiddleware.after_agent` emits one `citation` per `[n]` the answer actually used, bound to the answer's `message_id`; sources are numbered per run.)
+- [x] Exercises the fastembed aliases, `ctx.resources["vectors"]`, and `thinking.delta`.
 
 **Packaging and acceptance gates**
-- [ ] In the repo, each example is a uv workspace member (`examples/*`) depending on `vdreamer` via a workspace source, so examples consume only the public API. Each example's dependencies are also declared in standard `pyproject.toml` form, so operators can install it with pip.
-- [ ] CI runs UC1–UC3 against the floor (`lowest-direct`) **and** latest 1.x jobs (A41).
-- [ ] Gap review: any core change a reference agent needs must pass the design rule (≥2 reference agents need it / can't be built on primitives) before merging into core.
+- [x] In the repo, each example is a uv workspace member (`examples/*`) depending on `vdreamer` via a workspace source, so examples consume only the public API. Each example's dependencies are also declared in standard `pyproject.toml` form, so operators can install it with pip. (`[tool.uv.workspace]` members + a dev-group dependency on each example; `[tool.uv.sources] vdreamer = { workspace = true }`.)
+- [x] CI runs UC1–UC3 against the floor (`lowest-direct`) **and** latest 1.x jobs (A41). (`tests/acceptance` added to both jobs in `.github/workflows/ci.yml`.)
+- [x] Gap review: any core change a reference agent needs must pass the design rule (≥2 reference agents need it / can't be built on primitives) before merging into core.
 
-**Exit:** all three agents run full scenarios in the Milestone-10 air-gap environment, with zero vdreamer internals touched. **P0 complete.**
+**Gap review — what the reference agents needed from core.** Two changes, both justified under the design rule; everything else was built on existing primitives.
+1. **`resolved_by` in the `require_approval` resume value** (`gateway/routes_interrupts.py`). UC1's write path must record *which* dba approved, and UC2's MCP receipt must carry the approver, not the role — two agents, and the identity is only known to the gateway, so it can't be built in agent code. `_graph_value` adds `resolved_by` (read from the interrupt record's own field) when the resume map is built, so what the graph receives carries who decided while the **stored resolution and the REST response stay byte-for-byte what the client sent** — no protocol-surface change, and the conformance kit needs no re-recording. The other three sources keep their shapes verbatim. `context.require_approval`'s docstring documents it, and `tests/api/test_interrupts.py` now asserts both halves: the record's `resolution` unchanged, the graph's value enriched.
+2. **`vdreamer run --inbox`** (`client.py`, `cli.py`). Both UC1's four-eyes write and UC2's headless verdict need an approver who does *not* own the thread to find and resolve work; threads are owner-scoped (§4), so the inbox is the approver's view. This is client surface, not protocol — no new endpoint.
+
+Also fixed while driving the examples: `vdreamer run --thread` with a `--message` replayed the thread's last finished run instead of starting the new turn; it now replays only when no new input was given, and still reattaches to a genuinely active run first.
+
+**Exit:** ✅ `uv run pytest tests/acceptance` — 19 passed, 3 skipped (the live tier). All three agents run their full scenarios through a real uvicorn gateway, real workers, real stores and the outbox, driven by `vdreamer run` (`run_terminal`) exactly as a developer types it, with **zero vdreamer internals touched** — enforced by an AST scan over every `examples/` source (`test_reference_agents.py`: only top-level `vdreamer` names, all in `__all__`; the scan is itself tested against a planted violation), plus `validate_agent` for all four agents and an alias check over every shipped `models*.yaml`/`resources*.yaml`.
+- `test_uc1_sql_analyst.py`, 4 tests: approve → table + report + chart-or-skip; a refused edit (422) then a valid one; feedback → replan → reject; and the write path — alice (dba) is refused by four-eyes and detaches (code 3), a non-dba's inbox is empty, bob approves from `--inbox`, alice reattaches to her thread and sees "Done: 1 row(s) changed in orders", with the SQLite warehouse actually updated.
+- `test_uc2_site_validation.py`, 4 tests: approve → the MCP receipt carries `approved_by: "sam"` (not the role) and the outbox holds `interrupt` + `completed` callbacks; a mismatch + reject → run `rejected`, a `failed` callback, nothing recorded; an edited verdict; and an unsafe ZIP (`../../etc/passwd`) failing the run.
+- `test_uc3_pdf_research.py`, 2 tests: EN + AR text documents and a PDF ingested into a real `AsyncQdrantClient(":memory:")` shared by both agents' runners (5 points on POSIX, 4 plus a "skipped" row where the sandbox is unavailable); then `search_documents` → a cited answer with the reasoning shown as thinking and `[1]` resolved to `doc://policy_en.txt` page 1; a second turn on the same thread running `compare_documents` → a `comparison` table with both languages, per-run source numbering, and citations only for the markers the answer used. Plus: no sources → no citations.
+- `test_reference_agents.py`, 9 tests: the public-API scan, the scan's own negative test, `validate_agent` per agent, and the config alias checks.
+- `test_uc_live_ollama.py`, 3 tests, **opt-in** (`VDREAMER_TEST_OLLAMA=1`): the same three stacks with each example's chat/VLM alias built from its own `config/models.ollama.yaml` — Ollama `gemma4:31b-cloud`. The `-cloud` tag runs the model on ollama.com, so this tier causes egress and never runs in CI; it asserts the workflow, not the model's wording.
+- What is real in the acceptance tier vs. scripted at the boundary is documented in `tests/acceptance/_uc_kit.py`: real gateway/workers/stores/outbox/client, real Qdrant, the real MCP stdio server, real `safe_extract` and the real sandbox on POSIX; scripted only at the model and driver edges (`ScriptedModel`, `FakeNeo4j` reading the example's own `demo/semantic.json`, and lexical stand-ins with fastembed's method shapes).
+- Air-gap note: the examples' production `models.yaml` point at vLLM + the multilingual fastembed models, pre-fetched by `vdreamer bundle --models`; `validate` on UC3 fails only where that fastembed cache is absent, which is the intended signal.
+- Full suite: **955 passed, 28 skipped**; ruff + mypy (strict) clean.
+
+**P0 complete.**
 
 ---
 

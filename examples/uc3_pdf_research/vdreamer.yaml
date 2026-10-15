@@ -1,0 +1,3 @@
+agents:
+  pdf-ingest: pdf_research.agents:ingest_agent
+  pdf-research: pdf_research.agents:research_agent

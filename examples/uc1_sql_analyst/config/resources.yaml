@@ -1,0 +1,11 @@
+# Agent resources (§3.7). Secrets are *_env references only (A23).
+semantic:
+  type: neo4j
+  uri: bolt://10.20.0.9:7687
+  user_env: SEMANTIC_NEO4J_USER
+  password_env: SEMANTIC_NEO4J_PASSWORD
+  read_only: true
+warehouse:
+  # Writes are possible on purpose: they go through the dba-gated write review.
+  type: sql
+  url_env: WAREHOUSE_URL

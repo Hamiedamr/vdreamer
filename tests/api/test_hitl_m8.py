@@ -144,7 +144,11 @@ def test_chat_reject_routes_to_on_reject(live: TestClient) -> None:
     assert _resolve(live, record, {"action": "reject", "text": "no"}).status_code == 200
     final = wait_for_status(live, run_id, "completed")  # chat: the conversation goes on
     assert final["status"] == "completed"
-    assert _values(live, thread_id)["result"] == "not run"
+    values = _values(live, thread_id)
+    assert values["result"] == "not run"
+    # The gateway adds who decided to the resume value (the gate stores it whole).
+    assert values["approval"]["resolved_by"] == "alice"
+    assert values["approval"]["action"] == "reject" and values["approval"]["text"] == "no"
 
 
 # -- tool_review: interrupt_policies + the middleware's decisions shape ------------------------

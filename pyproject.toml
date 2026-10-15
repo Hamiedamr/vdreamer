@@ -60,6 +60,16 @@ sql = [
     "sqlalchemy[asyncio]>=2.0.40",
 ]
 
+# The reference agents (PRD §7.3, Milestone 12) are workspace members: each depends on
+# vdreamer through the workspace source, so they consume exactly this tree's public API.
+[tool.uv.workspace]
+members = ["examples/uc1_sql_analyst", "examples/uc2_site_validation", "examples/uc3_pdf_research"]
+
+[tool.uv.sources]
+vdreamer-example-sql-analyst = { workspace = true }
+vdreamer-example-site-validation = { workspace = true }
+vdreamer-example-pdf-research = { workspace = true }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -78,6 +88,9 @@ dev = [
     "openapi-spec-validator>=0.9.0",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20261006",
+    "vdreamer-example-sql-analyst",
+    "vdreamer-example-site-validation",
+    "vdreamer-example-pdf-research",
 ]
 # Golden-event harness deps land with Milestone 2 (A31/A43), when the harness exists.
 

@@ -12,6 +12,9 @@ for apps (A45).
   ``POST /agents/{name}/trigger`` with an ``Idempotency-Key``, then stream.
 - **reattach** (``--thread`` with an active run): follow that run from the
   thread's replay, then continue.
+- **inbox** (``--inbox``): resolve the pending interrupts of this agent the
+  user may see — how an approver (``approver_role``, four-eyes) acts on runs
+  they do not own.
 
 Streaming follows §6.1: ``X-Protocol-Version: 1``; reconnect with backoff and
 jitter and ``Last-Event-ID``; dedup by ``(run_id, seq)``; unknown event types
@@ -449,6 +452,9 @@ class Session:
             r for r in inbox if r.get("run_id") == run_id and r.get("status") == "pending"
         ]
         if not records:
+            current = self.gateway.get(f"/runs/{run_id}").get("status")
+            if current != "awaiting_approval":
+                return  # a replayed pause, resolved since: keep reading
             raise Detached(
                 "the run waits for an approver this user cannot act for "
                 "(another user/role must resolve it)"
@@ -498,10 +504,14 @@ class Session:
         )
         return str(created["run_id"]), str(created["thread_id"])
 
-    def active_run(self, thread_id: str) -> str | None:
-        detail = self.gateway.get(f"/threads/{thread_id}")
-        active = [run for run in detail.get("runs") or [] if run.get("status") in ACTIVE]
-        return str(active[-1]["run_id"]) if active else None
+    def latest_run(self, thread_id: str) -> tuple[str, str] | None:
+        """``(run_id, status)`` of the thread's active run, else its most recent one."""
+        runs = list(self.gateway.get(f"/threads/{thread_id}").get("runs") or [])
+        if not runs:
+            return None
+        active = [run for run in runs if run.get("status") in ACTIVE]
+        chosen = active[-1] if active else max(runs, key=lambda run: str(run["created_at"]))
+        return str(chosen["run_id"]), str(chosen["status"])
 
 
 @dataclass(frozen=True)
@@ -519,6 +529,7 @@ class RunOptions:
     idempotency_key: str | None = None
     callback: str | None = None
     service: bool = False
+    inbox: bool = False
     once: bool = False
     color: bool = True
 
@@ -571,13 +582,31 @@ def run_terminal(
                 return _input_from_text(options.message, options.field_name)
             return None
 
+        if options.inbox:
+            # An approver acts on runs they do not own (another user's, a service's):
+            # the inbox is their view, not the thread (§4, owner-scoped threads).
+            pending = [
+                r for r in gateway.get("/interrupts")["interrupts"]
+                if r.get("agent") == options.agent and r.get("status") == "pending"
+            ]
+            if not pending:
+                session.say(style.dim(f"[no pending interrupts for {options.agent}]"))
+                return 0
+            for record in pending:
+                session.say(style.dim(f"[run {record['run_id']} on {record['thread_id']}]"))
+                session.resolve(record)
+            return 0
         if thread_id is not None:
-            active = session.active_run(thread_id)
-            if active is not None:
-                session.say(style.dim(f"[reattaching to {active} on {thread_id}]"))
+            latest = session.latest_run(thread_id)
+            # A new message continues the thread: a finished run is replayed only without one.
+            fresh = not headless and first_input() is not None
+            if latest is not None and (latest[1] in ACTIVE or not fresh):
+                run_id, current = latest
+                verb = "reattaching to" if current in ACTIVE else "replaying"
+                session.say(style.dim(f"[{verb} {run_id} on {thread_id}]"))
                 # The run's stream replays from its first event, then goes live (§3.3).
-                status = session.follow(active)
-                if options.once or headless:
+                status = session.follow(run_id)
+                if headless or (options.once and not fresh):
                     return 0 if status == "completed" else 2
         if headless:
             run_input = first_input()

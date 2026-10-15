@@ -1,0 +1,36 @@
+{
+  "tables": [
+    {
+      "table": "customers",
+      "description": "Customers and the region they buy from",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "description": "customer id"},
+        {"name": "name", "type": "TEXT", "description": "customer name"},
+        {"name": "region", "type": "TEXT", "description": "sales region: EMEA, APAC, AMER"}
+      ]
+    },
+    {
+      "table": "orders",
+      "description": "Orders: one row per order with its total amount",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "description": "order id"},
+        {"name": "customer_id", "type": "INTEGER", "description": "the ordering customer"},
+        {"name": "ordered_on", "type": "TEXT", "description": "order date, ISO 8601"},
+        {"name": "amount", "type": "REAL", "description": "order total in EUR (revenue)"},
+        {"name": "status", "type": "TEXT", "description": "open, shipped or cancelled"}
+      ]
+    },
+    {
+      "table": "products",
+      "description": "The product catalogue",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "description": "product id"},
+        {"name": "name", "type": "TEXT", "description": "product name"},
+        {"name": "category", "type": "TEXT", "description": "product category"}
+      ]
+    }
+  ],
+  "joins": [
+    {"left": "orders", "right": "customers", "on": "orders.customer_id = customers.id"}
+  ]
+}

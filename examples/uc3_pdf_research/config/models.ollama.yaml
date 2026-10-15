@@ -1,0 +1,22 @@
+# Developer workstation: Gemma 4 31B in Ollama as the reasoner (`gemma4:31b` when pulled
+# locally; the `-cloud` tag runs on ollama.com); fastembed as in production.
+aliases:
+  reasoner:
+    provider: ollama
+    base_url: http://127.0.0.1:11434
+    model: gemma4:31b-cloud
+    thinking: reasoning_content
+  dense:
+    provider: fastembed
+    kind: embedding
+    model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  sparse:
+    provider: fastembed
+    kind: sparse
+    model: Qdrant/bm25
+  rerank:
+    provider: fastembed
+    kind: rerank
+    model: jinaai/jina-reranker-v2-base-multilingual
+fastembed:
+  cache_dir: ./models-cache

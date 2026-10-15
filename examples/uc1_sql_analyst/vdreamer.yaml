@@ -1,0 +1,3 @@
+# Registry (D2): `vdreamer serve --registry vdreamer.yaml`, `vdreamer worker --agent sql-analyst --registry vdreamer.yaml`
+agents:
+  sql-analyst: sql_analyst.agent:agent

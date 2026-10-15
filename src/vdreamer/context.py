@@ -298,9 +298,10 @@ def require_approval(
         ttl_hours: how long the interrupt stays resolvable before expiry.
 
     Returns:
-        The resolution ``{"action": ..., "payload"?: ..., "text"?: ...}``. An
-        ``edit`` payload has been validated against ``edit_schema`` (again,
-        here) and is its JSON dump.
+        The resolution ``{"action": ..., "payload"?: ..., "text"?: ...,
+        "resolved_by": ...}`` — ``resolved_by`` is the deciding user's id (or
+        ``service:<name>``). An ``edit`` payload has been validated against
+        ``edit_schema`` (again, here) and is its JSON dump.
 
     Raises:
         ValueError: an unknown or empty action set, a non-positive TTL, or a

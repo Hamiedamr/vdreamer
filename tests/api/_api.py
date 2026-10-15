@@ -17,7 +17,8 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -433,13 +434,18 @@ def make_stack(
     extra_agents: Sequence[BaseAgent] = (),
     worker_agents: Sequence[str] | None = None,
     poll_interval_s: float = 0.01,
+    runner_options: Mapping[str, Callable[[], AbstractAsyncContextManager[Mapping[str, Any]]]]
+    | None = None,
 ) -> Stack:
     """A gateway stack; ``sqlite_path`` switches every store to the SQLite backend.
 
     aiosqlite resolves each call on the caller's own loop, so the stores work
     from the TestClient's loop and from the tests' ``asyncio.run`` alike.
     ``extra_agents`` join the kit's own (the conformance recorder adds its own);
-    ``worker_agents`` limits which agents get a worker (all by default).
+    ``worker_agents`` limits which agents get a worker (all by default);
+    ``runner_options`` opens per-agent ``AgentRunner`` kwargs (``models``,
+    ``resources``, ``mcp``, ``store``) inside the app's lifespan — on the
+    server's own event loop, as a worker opens its backends at boot.
     """
     agents = {**all_agents(), **{agent.name: agent for agent in extra_agents}}
     queue: InMemoryRunQueue
@@ -486,11 +492,17 @@ def make_stack(
             async def sink_factory(run_id: str) -> OutboxEventSink:
                 return writer
 
+            exits = contextlib.AsyncExitStack()
+            options: dict[str, dict[str, Any]] = {}
+            for name, factory in (runner_options or {}).items():
+                options[name] = dict(await exits.enter_async_context(factory()))
             stop = asyncio.Event()
             tasks = [
                 asyncio.create_task(
                     Worker(
-                        AgentRunner(agent, checkpointer=checkpointer),
+                        AgentRunner(
+                            agent, checkpointer=checkpointer, **options.get(agent.name, {})
+                        ),
                         queue,
                         agent_name=agent.name,
                         claimant=f"w-{agent.name}",
@@ -508,6 +520,7 @@ def make_stack(
             finally:
                 stop.set()
                 await asyncio.wait_for(asyncio.gather(*tasks), 5.0)
+                await exits.aclose()
 
     app = create_app(
         backend,

@@ -495,16 +495,34 @@ async def resolve_interrupt(
     return interrupt_out(resolved)
 
 
+def _graph_value(record: InterruptRecord) -> Any:
+    """What ``require_approval`` returns in the graph: the resolution plus who decided.
+
+    M12 gap review: UC1's write path records which dba approved and UC2 writes
+    the approver into its MCP receipt — the identity is the gateway's alone, so
+    agent code cannot derive it. The other sources keep their own shapes
+    verbatim (the middleware's ``decisions``, MCP ``responses``, raw payloads).
+    """
+    value = record.resolution
+    if record.kind in POLICY_KINDS or not isinstance(value, dict):
+        return value
+    return {**value, "resolved_by": record.resolved_by}
+
+
 async def _resume_when_settled(backend: GatewayBackend, run_id: str) -> None:
     """Requeue the run once none of its interrupts is pending (§3.2).
 
     The resume map carries every resolution the run has; the worker narrows it
     to the interrupts its checkpoint still awaits.
+
+    A ``require_approval`` resolution is handed to the graph with
+    ``resolved_by`` added (§4.5) — who decided is on the record, never inside
+    the stored resolution, so the REST shape stays exactly what was sent.
     """
     if await backend.interrupts.list(status=InterruptStatus.PENDING, run_id=run_id):
         return
     resolved = await backend.interrupts.list(status=InterruptStatus.RESOLVED, run_id=run_id)
-    resume = {record.interrupt_id: record.resolution for record in resolved}
+    resume = {record.interrupt_id: _graph_value(record) for record in resolved}
     try:
         await backend.queue.resume(run_id, resume=resume)
     except InvalidTransition:
