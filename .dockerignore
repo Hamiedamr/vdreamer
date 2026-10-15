@@ -1,4 +1,5 @@
-# Only pyproject.toml, uv.lock, README.md and src/ reach the build (see Dockerfile).
+# Only pyproject.toml, uv.lock, README.md, src/ and the workspace members'
+# pyproject.toml files (uv validates the lock against them) reach the build.
 .git
 .github
 .venv
@@ -14,6 +15,7 @@ dist
 build
 docs
 examples
+!examples/*/pyproject.toml
 tests
 vdreamer-bundle
 vdreamer-schema
