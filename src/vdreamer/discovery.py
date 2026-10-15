@@ -29,6 +29,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -57,11 +58,24 @@ class RegistryError(AgentLoadError):
     """
 
 
+def _ensure_cwd_importable() -> None:
+    """Put the working directory on ``sys.path``, as ``python -m`` and uvicorn do.
+
+    The ``vdreamer`` console script starts with its own bin directory as
+    ``sys.path[0]``, so ``vdreamer dev --agent my_agent:agent`` run from the
+    project folder would not find ``my_agent.py`` without this.
+    """
+    cwd = os.getcwd()
+    if cwd not in sys.path and "" not in sys.path:
+        sys.path.insert(0, cwd)
+
+
 def load_agent(spec: str) -> BaseAgent:
     """Load the agent named by a ``pkg.module:attribute`` spec."""
     module_name, sep, attr = spec.partition(":")
     if not module_name or not sep or not attr:
         raise AgentLoadError(f"agent spec {spec!r} must look like 'pkg.module:agent'")
+    _ensure_cwd_importable()
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:

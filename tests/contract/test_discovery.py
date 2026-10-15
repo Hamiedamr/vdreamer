@@ -308,3 +308,22 @@ def test_resolve_missing_agents_dir(tmp_path: Path) -> None:
     # AgentLoadError (the type this test pins).
     with pytest.raises(AgentLoadError, match="agents dir"):
         resolve_agent("alpha", agents_dir=tmp_path / "missing")
+
+
+def test_load_agent_imports_from_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `vdreamer dev --agent my_agent:agent` from a project folder: the console
+    # script's sys.path does not include the cwd, so discovery adds it.
+    import sys
+
+    (tmp_path / "cwd_agent_mod.py").write_text(
+        "from vdreamer import BaseAgent\n"
+        "class A(BaseAgent):\n"
+        "    name = 'cwd-agent'\n"
+        "agent = A()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in ("", str(tmp_path))])
+    assert load_agent("cwd_agent_mod:agent").name == "cwd-agent"
