@@ -183,4 +183,4 @@ uv run pytest tests/tutorials/test_t23_handoffs.py -v
 2. Clear `handoff_notes` when the customer starts a new topic (hint: a `/new` command, or a classifier).
 3. Count handoffs per turn and refuse a third one — then compare with lesson 24's approach.
 
-Next: Lesson 24 — Handling failures and controlling multi-agent execution.
+Next: [Lesson 24 — Handling failures and controlling multi-agent execution](../t24_multi_agent_control/README.md).

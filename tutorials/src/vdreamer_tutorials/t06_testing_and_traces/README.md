@@ -81,6 +81,8 @@ The scripted model is a LangChain `BaseChatModel`, so the agent cannot tell it f
         with self._lock:
             position = len(self.prompts)
             self.prompts.append(list(messages))
+        if self.delay_s:
+            time.sleep(self.delay_s)
         if position >= len(self.replies):
             raise ScriptExhausted(
                 f"the model was called {position + 1} times but only "
@@ -88,7 +90,7 @@ The scripted model is a LangChain `BaseChatModel`, so the agent cannot tell it f
             )
 ```
 
-Running past the end of the script raises instead of repeating a reply, so an agent that loops more than you expected fails the test loudly. `bind_tools` returns the model itself (and records the tool names): the *script*, not the tool list, decides what gets called.
+A script may also contain exceptions (raised by that call — a failing model server, lesson 10) and a `delay_s` (a slow one, lesson 24). Running past the end of the script raises instead of repeating a reply, so an agent that loops more than you expected fails the test loudly. `bind_tools` returns the model itself (and records the tool names): the *script*, not the tool list, decides what gets called.
 
 ## Step by step
 

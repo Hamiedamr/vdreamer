@@ -20,6 +20,7 @@ run the agent behind a real gateway instead (see ``tests/tutorials/_tutorial_kit
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -82,6 +83,8 @@ class ScriptedChatModel(BaseChatModel):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
 
     replies: list[BaseMessage | Exception]
+    delay_s: float = 0.0
+    """Seconds each call takes: a slow model server (lesson 24's timeouts)."""
     prompts: list[list[BaseMessage]] = pydantic.Field(default_factory=list)
     bound_tools: list[list[str]] = pydantic.Field(default_factory=list)
     _lock: threading.Lock = pydantic.PrivateAttr(default_factory=threading.Lock)
@@ -123,6 +126,8 @@ class ScriptedChatModel(BaseChatModel):
         with self._lock:
             position = len(self.prompts)
             self.prompts.append(list(messages))
+        if self.delay_s:
+            time.sleep(self.delay_s)
         if position >= len(self.replies):
             raise ScriptExhausted(
                 f"the model was called {position + 1} times but only "

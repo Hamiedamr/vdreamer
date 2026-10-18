@@ -31,6 +31,7 @@ Work through them in order; each builds on the ones before it.
 | 21 | [Specialised agents with clear responsibilities](src/vdreamer_tutorials/t21_specialists/README.md) | orders, products and policies specialists, each servable alone |
 | 22 | [A supervisor coordinating specialists](src/vdreamer_tutorials/t22_supervisor/README.md) | agents as tools, parallel delegation, nested events |
 | 23 | [Handoffs, shared state and communication](src/vdreamer_tutorials/t23_handoffs/README.md) | specialists that transfer the customer, with notes in shared state |
+| 24 | [Handling failures and controlling multi-agent execution](src/vdreamer_tutorials/t24_multi_agent_control/README.md) | limits and containment at every level of a supervisor system |
 
 ## Setup
 
