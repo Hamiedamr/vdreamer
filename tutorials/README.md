@@ -20,6 +20,7 @@ Work through them in order; each builds on the ones before it.
 | 10 | [Handling failures, retries and unexpected outputs](src/vdreamer_tutorials/t10_failures_and_retries/README.md) | tool and model retries, a fallback model, an output guard |
 | 11 | [Structuring an agent application as a Python package](src/vdreamer_tutorials/t11_package_structure/README.md) | a layered helpdesk package with an architecture test |
 | 12 | [Configuration, logging and observability](src/vdreamer_tutorials/t12_config_and_observability/README.md) | validated settings, run-aware logs, hooks, metrics |
+| 13 | [Agent state and conversation history](src/vdreamer_tutorials/t13_state_and_history/README.md) | typed per-thread state with reducers, checkpoints and history |
 
 ## Setup
 

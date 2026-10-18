@@ -213,4 +213,4 @@ uv run pytest tests/tutorials/test_t12_config_and_observability.py -v
 3. Count runs per final status in `on_run_end` with your own `prometheus_client.Counter` and check it shows up at `/api/v1/metrics`.
 4. Make the slow-lookup warning fire in a test by injecting a slow order source (lesson 8 style).
 
-Next: Lesson 13 — Agent state and conversation history.
+Next: [Lesson 13 — Agent state and conversation history](../t13_state_and_history/README.md).
