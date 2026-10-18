@@ -215,4 +215,4 @@ uv run pytest tests/tutorials/test_t27_approve_edit_reject.py -v
 2. Give the credit gate `approver_role="supervisor"` and run it headless via `/trigger` (make the agent `BOTH` with an input schema).
 3. Use `interrupt_policies = {"tool_review": InterruptPolicy(approver_role="supervisor")}` so only supervisors can review credits.
 
-Next: Lesson 28 — Middleware for logging, validation, authorization and execution control.
+Next: [Lesson 28 — Middleware for logging, validation, authorization and execution control](../t28_middleware/README.md).

@@ -30,3 +30,4 @@ agents:
   t26-warranty-claims: vdreamer_tutorials.t26_asking_for_input.agent:agent
   t27-credit-approval: vdreamer_tutorials.t27_approve_edit_reject.credit:agent
   t27-tool-review: vdreamer_tutorials.t27_approve_edit_reject.tool_review:agent
+  t28-guarded-assistant: vdreamer_tutorials.t28_middleware.agent:agent
