@@ -188,4 +188,4 @@ uv run pytest tests/tutorials/test_t11_package_structure.py -v
 2. Write a second agent, `t11-helpdesk-readonly`, that reuses `make_tools` but drops `can_cancel`. What did you need to change in the other modules? (Ideally nothing.)
 3. Extend the import-rule test so that `tools.py` may not import `langchain` (only `langchain_core`).
 
-Next: Lesson 12 — Configuration, logging and observability.
+Next: [Lesson 12 — Configuration, logging and observability](../t12_config_and_observability/README.md).

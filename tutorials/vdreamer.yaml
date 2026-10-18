@@ -11,3 +11,4 @@ agents:
   t09-support-desk: vdreamer_tutorials.t09_tool_selection.agent:agent
   t10-resilient-tracker: vdreamer_tutorials.t10_failures_and_retries.agent:agent
   t11-helpdesk: vdreamer_tutorials.t11_package_structure.helpdesk:agent
+  t12-observable: vdreamer_tutorials.t12_config_and_observability.agent:agent

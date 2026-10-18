@@ -19,6 +19,7 @@ Work through them in order; each builds on the ones before it.
 | 9 | [Tool selection and execution control](src/vdreamer_tutorials/t09_tool_selection/README.md) | role-based tool visibility, execution-time refusal, call limits |
 | 10 | [Handling failures, retries and unexpected outputs](src/vdreamer_tutorials/t10_failures_and_retries/README.md) | tool and model retries, a fallback model, an output guard |
 | 11 | [Structuring an agent application as a Python package](src/vdreamer_tutorials/t11_package_structure/README.md) | a layered helpdesk package with an architecture test |
+| 12 | [Configuration, logging and observability](src/vdreamer_tutorials/t12_config_and_observability/README.md) | validated settings, run-aware logs, hooks, metrics |
 
 ## Setup
 
