@@ -227,4 +227,4 @@ uv run pytest tests/tutorials/test_t08_tool_contracts.py -v
 3. Register a second agent, `t08-inventory-strict`, with `tool_policies = {"reserve_stock": Policy(requires_roles=("staff",))}` and see what a run without that role gets (preview of lesson 28).
 4. Make `InMemoryInventory` thread-safe (two concurrent reservations must not oversell) and test it with a thread pool.
 
-Next: Lesson 9 — Tool selection and execution control.
+Next: [Lesson 9 — Tool selection and execution control](../t09_tool_selection/README.md).

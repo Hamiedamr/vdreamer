@@ -16,6 +16,7 @@ Work through them in order; each builds on the ones before it.
 | 6 | [Testing agents and reading execution traces](src/vdreamer_tutorials/t06_testing_and_traces/README.md) | tests at every level, from rule to live model |
 | 7 | [An agent with multiple tools](src/vdreamer_tutorials/t07_multiple_tools/README.md) | a shop assistant that selects, chains and batches four tools |
 | 8 | [Designing reusable tools with clear contracts](src/vdreamer_tutorials/t08_tool_contracts/README.md) | a tool factory over an injected inventory, idempotent reservations |
+| 9 | [Tool selection and execution control](src/vdreamer_tutorials/t09_tool_selection/README.md) | role-based tool visibility, execution-time refusal, call limits |
 
 ## Setup
 

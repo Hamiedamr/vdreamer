@@ -8,3 +8,4 @@ agents:
   t06-returns: vdreamer_tutorials.t06_testing_and_traces.agent:agent
   t07-shop-assistant: vdreamer_tutorials.t07_multiple_tools.agent:agent
   t08-inventory: vdreamer_tutorials.t08_tool_contracts.agent:agent
+  t09-support-desk: vdreamer_tutorials.t09_tool_selection.agent:agent
