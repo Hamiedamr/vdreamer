@@ -163,4 +163,4 @@ This lesson is its own test. The property most often forgotten is deletion *scop
 2. Add a "retention" rule — notes older than N days are not recalled — with an injectable clock (lesson 6) and tests.
 3. Point the durability test at Postgres (`langgraph-checkpoint-postgres` is already a vdreamer dependency) and skip it unless `VDREAMER_TEST_PG_DSN` is set.
 
-Next: Lesson 18 — Structured outputs and typed data models.
+Next: [Lesson 18 — Structured outputs and typed data models](../t18_structured_output/README.md).

@@ -25,6 +25,7 @@ Work through them in order; each builds on the ones before it.
 | 15 | [Persistent long-term memory](src/vdreamer_tutorials/t15_long_term_memory/README.md) | per-customer notes in vdreamer's store, across conversations |
 | 16 | [Managing context growth and conversation boundaries](src/vdreamer_tutorials/t16_context_management/README.md) | silent summaries of old turns, cut at turn boundaries |
 | 17 | [Testing memory persistence, retrieval and isolation](src/vdreamer_tutorials/t17_testing_memory/README.md) | a memory test suite, including a real `vdreamer dev` restart |
+| 18 | [Structured outputs and typed data models](src/vdreamer_tutorials/t18_structured_output/README.md) | typed input, a validated triage with retry and fallback, a JSON artifact |
 
 ## Setup
 

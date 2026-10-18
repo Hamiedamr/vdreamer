@@ -17,3 +17,4 @@ agents:
   t15-customer-memory: vdreamer_tutorials.t15_long_term_memory.agent:agent
   t16-long-conversation: vdreamer_tutorials.t16_context_management.agent:agent
   t17-memory-desk: vdreamer_tutorials.t17_testing_memory.agent:agent
+  t18-ticket-triage: vdreamer_tutorials.t18_structured_output.agent:agent
