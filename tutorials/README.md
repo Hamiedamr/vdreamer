@@ -24,6 +24,7 @@ Work through them in order; each builds on the ones before it.
 | 14 | [Short-term conversational memory](src/vdreamer_tutorials/t14_short_term_memory/README.md) | a transcript plus working memory written by a tool |
 | 15 | [Persistent long-term memory](src/vdreamer_tutorials/t15_long_term_memory/README.md) | per-customer notes in vdreamer's store, across conversations |
 | 16 | [Managing context growth and conversation boundaries](src/vdreamer_tutorials/t16_context_management/README.md) | silent summaries of old turns, cut at turn boundaries |
+| 17 | [Testing memory persistence, retrieval and isolation](src/vdreamer_tutorials/t17_testing_memory/README.md) | a memory test suite, including a real `vdreamer dev` restart |
 
 ## Setup
 

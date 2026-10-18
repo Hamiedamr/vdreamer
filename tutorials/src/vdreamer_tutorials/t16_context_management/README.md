@@ -186,4 +186,4 @@ uv run pytest tests/tutorials/test_t16_context_management.py -v
 2. Keep order ids out of the summary's lossiness: extract them into a state key (lesson 13) before deleting old messages.
 3. Add a `/new` command in your client that starts a new thread and copies the summary into the first message.
 
-Next: Lesson 17 — Testing memory persistence, retrieval and isolation.
+Next: [Lesson 17 — Testing memory persistence, retrieval and isolation](../t17_testing_memory/README.md).
