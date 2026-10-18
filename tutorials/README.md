@@ -22,6 +22,7 @@ Work through them in order; each builds on the ones before it.
 | 12 | [Configuration, logging and observability](src/vdreamer_tutorials/t12_config_and_observability/README.md) | validated settings, run-aware logs, hooks, metrics |
 | 13 | [Agent state and conversation history](src/vdreamer_tutorials/t13_state_and_history/README.md) | typed per-thread state with reducers, checkpoints and history |
 | 14 | [Short-term conversational memory](src/vdreamer_tutorials/t14_short_term_memory/README.md) | a transcript plus working memory written by a tool |
+| 15 | [Persistent long-term memory](src/vdreamer_tutorials/t15_long_term_memory/README.md) | per-customer notes in vdreamer's store, across conversations |
 
 ## Setup
 

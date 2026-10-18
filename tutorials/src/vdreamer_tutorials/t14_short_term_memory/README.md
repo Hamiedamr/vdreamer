@@ -171,4 +171,4 @@ uv run pytest tests/tutorials/test_t14_short_term_memory.py -v
 2. Cap working memory at five preferences (oldest dropped) and test the cap.
 3. Remember the order the customer is asking about (`current_order_id`) and have `get_order_status` (lesson 2) default to it when the model omits the id.
 
-Next: Lesson 15 — Persistent long-term memory.
+Next: [Lesson 15 — Persistent long-term memory](../t15_long_term_memory/README.md).

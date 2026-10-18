@@ -14,3 +14,4 @@ agents:
   t12-observable: vdreamer_tutorials.t12_config_and_observability.agent:agent
   t13-support-thread: vdreamer_tutorials.t13_state_and_history.agent:agent
   t14-preferences: vdreamer_tutorials.t14_short_term_memory.agent:agent
+  t15-customer-memory: vdreamer_tutorials.t15_long_term_memory.agent:agent
