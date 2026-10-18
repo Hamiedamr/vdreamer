@@ -14,12 +14,12 @@ answers with those facts in its system prompt::
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, NotRequired
 
 from langchain_core.messages import AnyMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from vdreamer import BaseAgent, BuildContext, Mode
 

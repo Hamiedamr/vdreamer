@@ -13,3 +13,4 @@ agents:
   t11-helpdesk: vdreamer_tutorials.t11_package_structure.helpdesk:agent
   t12-observable: vdreamer_tutorials.t12_config_and_observability.agent:agent
   t13-support-thread: vdreamer_tutorials.t13_state_and_history.agent:agent
+  t14-preferences: vdreamer_tutorials.t14_short_term_memory.agent:agent

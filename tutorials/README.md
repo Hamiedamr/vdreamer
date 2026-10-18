@@ -21,6 +21,7 @@ Work through them in order; each builds on the ones before it.
 | 11 | [Structuring an agent application as a Python package](src/vdreamer_tutorials/t11_package_structure/README.md) | a layered helpdesk package with an architecture test |
 | 12 | [Configuration, logging and observability](src/vdreamer_tutorials/t12_config_and_observability/README.md) | validated settings, run-aware logs, hooks, metrics |
 | 13 | [Agent state and conversation history](src/vdreamer_tutorials/t13_state_and_history/README.md) | typed per-thread state with reducers, checkpoints and history |
+| 14 | [Short-term conversational memory](src/vdreamer_tutorials/t14_short_term_memory/README.md) | a transcript plus working memory written by a tool |
 
 ## Setup
 

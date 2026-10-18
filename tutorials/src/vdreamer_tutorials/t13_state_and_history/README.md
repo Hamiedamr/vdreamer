@@ -173,4 +173,4 @@ uv run pytest tests/tutorials/test_t13_state_and_history.py -v
 2. Add a `"reset"` command: when the user writes `/reset`, an entry node clears `topics` (hint: a reducer cannot *remove* — make the update replace, or use a sentinel).
 3. Using `aget_state_history`, write a test that finds the checkpoint taken just after `extract` in the first run and checks its `turn`.
 
-Next: Lesson 14 — Short-term conversational memory.
+Next: [Lesson 14 — Short-term conversational memory](../t14_short_term_memory/README.md).
