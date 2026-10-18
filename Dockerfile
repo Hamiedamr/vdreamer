@@ -32,9 +32,11 @@ ENV UV_PYTHON_DOWNLOADS=never \
 WORKDIR /src
 # Dependencies first (cached unless the lockfile changes), then the project.
 COPY pyproject.toml uv.lock README.md ./
-# The workspace members (examples/*, dev group only) are never installed here, but
-# uv reads their pyproject.toml to check the lock; .dockerignore lets only those in.
+# The workspace members (examples/*, tutorials; dev group only) are never installed
+# here, but uv reads their pyproject.toml to check the lock; .dockerignore lets only
+# those in.
 COPY examples ./examples
+COPY tutorials ./tutorials
 RUN uv sync --locked --no-dev --no-install-project --all-extras
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable --all-extras \

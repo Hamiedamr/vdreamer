@@ -16,6 +16,8 @@ build
 docs
 examples
 !examples/*/pyproject.toml
+tutorials
+!tutorials/pyproject.toml
 tests
 vdreamer-bundle
 vdreamer-schema

@@ -26,6 +26,7 @@ members = [
     "vdreamer-example-playground",
     "vdreamer-example-site-validation",
     "vdreamer-example-sql-analyst",
+    "vdreamer-tutorials",
 ]
 
 [[package]]
@@ -4766,6 +4767,7 @@ dev = [
     { name = "vdreamer-example-playground" },
     { name = "vdreamer-example-site-validation" },
     { name = "vdreamer-example-sql-analyst" },
+    { name = "vdreamer-tutorials" },
 ]
 
 [package.metadata]
@@ -4815,6 +4817,7 @@ dev = [
     { name = "vdreamer-example-playground", editable = "examples/playground" },
     { name = "vdreamer-example-site-validation", editable = "examples/uc2_site_validation" },
     { name = "vdreamer-example-sql-analyst", editable = "examples/uc1_sql_analyst" },
+    { name = "vdreamer-tutorials", editable = "tutorials" },
 ]
 
 [[package]]
@@ -4868,6 +4871,17 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "vdreamer", extras = ["sql", "neo4j", "sandbox"], editable = "." },
 ]
+
+[[package]]
+name = "vdreamer-tutorials"
+version = "0.1.0"
+source = { editable = "tutorials" }
+dependencies = [
+    { name = "vdreamer" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vdreamer", editable = "." }]
 
 [[package]]
 name = "watchfiles"

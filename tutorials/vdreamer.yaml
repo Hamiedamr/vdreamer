@@ -1,0 +1,9 @@
+# Registry: `vdreamer dev --registry vdreamer.yaml --agent <name>` (run from tutorials/).
+agents:
+  t01-echo: vdreamer_tutorials.t01_serving_an_agent.agent:agent
+  t02-order-status: vdreamer_tutorials.t02_minimal_react_agent.agent:agent
+  t03-react-loop: vdreamer_tutorials.t03_react_loop.agent:agent
+  t04-shipping-quote: vdreamer_tutorials.t04_custom_tool.agent:agent
+  t05-order-desk: vdreamer_tutorials.t05_tool_errors.agent:agent
+  t06-returns: vdreamer_tutorials.t06_testing_and_traces.agent:agent
+  t07-shop-assistant: vdreamer_tutorials.t07_multiple_tools.agent:agent

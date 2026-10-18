@@ -1,0 +1,31 @@
+# vdreamer tutorials
+
+A hands-on series that takes you from a one-tool ReAct agent to multi-agent systems with memory, middleware and human approval — every lesson a working agent served by [vdreamer](../README.md), with tests.
+
+## Lessons
+
+Work through them in order; each builds on the ones before it.
+
+| # | Lesson | You build |
+| --- | --- | --- |
+| 1 | [How vdreamer serves an agent](src/vdreamer_tutorials/t01_serving_an_agent/README.md) | a one-node agent with no model; threads, runs and events |
+| 2 | [A minimal ReAct agent](src/vdreamer_tutorials/t02_minimal_react_agent/README.md) | `create_agent` with one tool and a model alias |
+| 3 | [Inside the reasoning-and-action loop](src/vdreamer_tutorials/t03_react_loop/README.md) | the ReAct loop by hand, with a step budget |
+| 4 | [Defining and integrating a custom tool](src/vdreamer_tutorials/t04_custom_tool/README.md) | a typed tool and the schema the model sees |
+| 5 | [Tool inputs, outputs, errors and validation](src/vdreamer_tutorials/t05_tool_errors/README.md) | validated, contained, time-bounded tools |
+| 6 | [Testing agents and reading execution traces](src/vdreamer_tutorials/t06_testing_and_traces/README.md) | tests at every level, from rule to live model |
+| 7 | [An agent with multiple tools](src/vdreamer_tutorials/t07_multiple_tools/README.md) | a shop assistant that selects, chains and batches four tools |
+
+## Setup
+
+Python 3.11+ and [uv](https://docs.astral.sh/uv/). From the repository root:
+
+```bash
+uv sync --all-extras
+cd tutorials
+cp .env.example .env
+uv run vdreamer dev --registry vdreamer.yaml --agent t01-echo \
+    --input '{"messages": [{"role": "user", "content": "hello"}]}'
+```
+
+Lessons from 2 on use a model through the `chat` alias: `config/models.ollama.yaml` (Ollama, `gemma4:31b-cloud` — runs on ollama.com; use `gemma4:31b` to stay local) or `config/models.vllm.yaml` (any OpenAI-compatible server). The tests need no model server: `uv run pytest tests/tutorials` from the repository root.

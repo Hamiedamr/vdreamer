@@ -87,13 +87,14 @@ sql = [
 # The reference agents (PRD §7.3, Milestone 12) are workspace members: each depends on
 # vdreamer through the workspace source, so they consume exactly this tree's public API.
 [tool.uv.workspace]
-members = ["examples/uc1_sql_analyst", "examples/uc2_site_validation", "examples/uc3_pdf_research", "examples/playground"]
+members = ["examples/uc1_sql_analyst", "examples/uc2_site_validation", "examples/uc3_pdf_research", "examples/playground", "tutorials"]
 
 [tool.uv.sources]
 vdreamer-example-sql-analyst = { workspace = true }
 vdreamer-example-site-validation = { workspace = true }
 vdreamer-example-pdf-research = { workspace = true }
 vdreamer-example-playground = { workspace = true }
+vdreamer-tutorials = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -121,6 +122,7 @@ dev = [
     "vdreamer-example-site-validation",
     "vdreamer-example-pdf-research",
     "vdreamer-example-playground",
+    "vdreamer-tutorials",
 ]
 # Golden-event harness deps land with Milestone 2 (A31/A43), when the harness exists.
 

@@ -1,0 +1,21 @@
+[project]
+name = "vdreamer-tutorials"
+version = "0.1.0"
+description = "A hands-on tutorial series: from a one-tool ReAct agent to multi-agent systems with memory, middleware and human approval, served by vdreamer."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+# Plain pip works too: `pip install ./tutorials` (vdreamer from your index or wheelhouse).
+dependencies = [
+    "vdreamer",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vdreamer_tutorials"]
+
+[tool.uv.sources]
+vdreamer = { workspace = true }

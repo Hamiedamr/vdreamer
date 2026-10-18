@@ -1,0 +1,10 @@
+# Any OpenAI-compatible server (vLLM, llama.cpp `llama-server`, LM Studio, TGI, ...).
+# Point base_url at the server's /v1 and set `model` to an id it lists at /v1/models.
+# The key, if your server needs one, is read from the env var named here (never the YAML).
+aliases:
+  chat:
+    provider: vllm
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen/Qwen3-8B
+    api_key_env: LLM_API_KEY
+    temperature: 0

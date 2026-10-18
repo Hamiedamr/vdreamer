@@ -1,0 +1,11 @@
+# Developer workstation: Gemma 4 31B in Ollama (tool calling + structured output).
+#
+# `gemma4:31b-cloud` runs on ollama.com: prompts leave your machine (egress).
+# To stay fully local, `ollama pull gemma4:31b` and change `model` to `gemma4:31b`,
+# or use any other tool-calling model you have pulled (e.g. `qwen3:8b`).
+aliases:
+  chat:
+    provider: ollama
+    base_url: http://127.0.0.1:11434
+    model: gemma4:31b-cloud
+    temperature: 0
