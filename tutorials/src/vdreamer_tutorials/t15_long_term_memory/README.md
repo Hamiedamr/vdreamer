@@ -166,4 +166,4 @@ uv run pytest tests/tutorials/test_t15_long_term_memory.py -v
 3. Add `MAX_NOTES_PER_CUSTOMER = 50` and drop the oldest on overflow; test it.
 4. Write a script that exports one customer's notes from the dev store (hint: `AsyncSqliteStore.from_conn_string(".vdreamer/dev.db")`).
 
-Next: Lesson 16 — Managing context growth and conversation boundaries.
+Next: [Lesson 16 — Managing context growth and conversation boundaries](../t16_context_management/README.md).
