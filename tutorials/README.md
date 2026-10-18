@@ -18,6 +18,7 @@ Work through them in order; each builds on the ones before it.
 | 8 | [Designing reusable tools with clear contracts](src/vdreamer_tutorials/t08_tool_contracts/README.md) | a tool factory over an injected inventory, idempotent reservations |
 | 9 | [Tool selection and execution control](src/vdreamer_tutorials/t09_tool_selection/README.md) | role-based tool visibility, execution-time refusal, call limits |
 | 10 | [Handling failures, retries and unexpected outputs](src/vdreamer_tutorials/t10_failures_and_retries/README.md) | tool and model retries, a fallback model, an output guard |
+| 11 | [Structuring an agent application as a Python package](src/vdreamer_tutorials/t11_package_structure/README.md) | a layered helpdesk package with an architecture test |
 
 ## Setup
 

@@ -171,4 +171,4 @@ uv run pytest tests/tutorials/test_t10_failures_and_retries.py -v
 3. Extend `replace_empty_answer` to also catch a reply that just repeats the user's question.
 4. Use `ToolCallLimitMiddleware` (lesson 9) together with the retry: which one counts retries?
 
-Next: Lesson 11 — Structuring an agent application as a Python package.
+Next: [Lesson 11 — Structuring an agent application as a Python package](../t11_package_structure/README.md).
