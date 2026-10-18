@@ -194,4 +194,4 @@ uv run pytest tests/tutorials/test_t07_multiple_tools.py -v
 3. Write a scripted test for "Where is A1001 and what is your returns policy?" expecting a two-call fan-out.
 4. With a live model, ask "Do you have tents?" and look at whether it searches or asks a clarifying question. Adjust the prompt and compare.
 
-Next: Lesson 8 — Designing reusable tools with clear contracts.
+Next: [Lesson 8 — Designing reusable tools with clear contracts](../t08_tool_contracts/README.md).
