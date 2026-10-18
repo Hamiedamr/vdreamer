@@ -179,4 +179,4 @@ uv run pytest tests/tutorials/test_t24_multi_agent_control.py -v
 2. Apply a per-turn handoff budget to lesson 23's desk (count transfers in state; refuse the third).
 3. Emit a `log` warning event whenever a delegation fails, so the client can show "some information is unavailable".
 
-Next: Lesson 25 — Introducing human-in-the-loop.
+Next: [Lesson 25 — Introducing human-in-the-loop](../t25_human_in_the_loop/README.md).
