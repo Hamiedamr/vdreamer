@@ -34,6 +34,7 @@ Work through them in order; each builds on the ones before it.
 | 24 | [Handling failures and controlling multi-agent execution](src/vdreamer_tutorials/t24_multi_agent_control/README.md) | limits and containment at every level of a supervisor system |
 | 25 | [Introducing human-in-the-loop](src/vdreamer_tutorials/t25_human_in_the_loop/README.md) | a refund that waits for a person's approval (no model needed) |
 | 26 | [Pausing for approval or additional input](src/vdreamer_tutorials/t26_asking_for_input/README.md) | asking the customer, asking a manager, headless rules |
+| 27 | [Approving, rejecting and editing proposed actions](src/vdreamer_tutorials/t27_approve_edit_reject/README.md) | `ApprovalGate` with edit and re-plan; reviewing tool calls |
 
 ## Setup
 

@@ -170,4 +170,4 @@ uv run pytest tests/tutorials/test_t26_asking_for_input.py -v
 2. Give rejected claims a reason: offer `feedback` to the manager and include the text in the reply.
 3. Trigger the agent headlessly with a serial in the message and check that the manager review still happens (headless approvals with a role are allowed).
 
-Next: Lesson 27 — Approving, rejecting and editing proposed actions.
+Next: [Lesson 27 — Approving, rejecting and editing proposed actions](../t27_approve_edit_reject/README.md).
