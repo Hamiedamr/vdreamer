@@ -166,4 +166,4 @@ uv run pytest tests/tutorials/test_t22_supervisor.py -v
 2. Add the `delivery` specialist from lesson 21's exercise; the supervisor prompt and tools update from data alone.
 3. Let the supervisor pass a short `context` string with each question and measure (with the scripted prompts) what the specialist now sees.
 
-Next: Lesson 23 — Handoffs, shared state and communication.
+Next: [Lesson 23 — Handoffs, shared state and communication](../t23_handoffs/README.md).
