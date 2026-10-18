@@ -187,4 +187,4 @@ uv run pytest tests/tutorials/test_t18_structured_output.py -v
 3. Add `sentiment: float = Field(ge=-1, le=1)` and test that `1.5` triggers a retry.
 4. Generate the TypeScript type for `TicketInput` with `vdreamer export-schema --out schema` and find it in the output.
 
-Next: Lesson 19 — Sequential and conditional workflows.
+Next: [Lesson 19 — Sequential and conditional workflows](../t19_workflows/README.md).
