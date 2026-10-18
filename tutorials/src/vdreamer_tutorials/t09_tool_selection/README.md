@@ -161,4 +161,4 @@ uv run pytest tests/tutorials/test_t09_tool_selection.py -v
 3. Change the refund's execution rule from `requires_roles` to `scope="refunds:write"` and give staff the role `refunds:*` (an `fnmatch` pattern). Which test needs updating?
 4. Try `ToolCallLimitMiddleware(..., exit_behavior="end")` and look at the trace of a double refund.
 
-Next: Lesson 10 — Handling failures, retries and unexpected outputs.
+Next: [Lesson 10 — Handling failures, retries and unexpected outputs](../t10_failures_and_retries/README.md).

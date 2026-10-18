@@ -9,3 +9,9 @@ aliases:
     base_url: http://127.0.0.1:11434
     model: gemma4:31b-cloud
     temperature: 0
+  # Lesson 10's fallback model: used only when `chat` keeps failing. Fully local.
+  backup:
+    provider: ollama
+    base_url: http://127.0.0.1:11434
+    model: qwen3:8b
+    temperature: 0

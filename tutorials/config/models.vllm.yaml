@@ -8,3 +8,10 @@ aliases:
     model: Qwen/Qwen3-8B
     api_key_env: LLM_API_KEY
     temperature: 0
+  # Lesson 10's fallback model: a second deployment, used only when `chat` keeps failing.
+  backup:
+    provider: vllm
+    base_url: http://127.0.0.1:8001/v1
+    model: Qwen/Qwen3-4B
+    api_key_env: LLM_API_KEY
+    temperature: 0

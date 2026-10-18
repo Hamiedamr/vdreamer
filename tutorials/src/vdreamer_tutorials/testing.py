@@ -73,11 +73,14 @@ class ScriptedChatModel(BaseChatModel):
     ``prompts[i]`` is the exact message list the i-th call received, so a test
     can assert what the model *saw* (the system prompt, the tool results, the
     conversation history). ``bound_tools[i]`` lists the tool names of the i-th
-    ``bind_tools`` call. Running past the end of the script raises
+    ``bind_tools`` call. An exception in the script is raised by that call — a
+    model server failing (lesson 10). Running past the end of the script raises
     :class:`ScriptExhausted` instead of silently repeating an answer.
     """
 
-    replies: list[BaseMessage]
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+
+    replies: list[BaseMessage | Exception]
     prompts: list[list[BaseMessage]] = pydantic.Field(default_factory=list)
     bound_tools: list[list[str]] = pydantic.Field(default_factory=list)
     _lock: threading.Lock = pydantic.PrivateAttr(default_factory=threading.Lock)
@@ -124,8 +127,11 @@ class ScriptedChatModel(BaseChatModel):
                 f"the model was called {position + 1} times but only "
                 f"{len(self.replies)} replies were scripted"
             )
-        reply = self.replies[position].model_copy(deep=True)
-        return ChatResult(generations=[ChatGeneration(message=reply)])
+        scripted_reply = self.replies[position]
+        if isinstance(scripted_reply, Exception):
+            raise scripted_reply
+        message = scripted_reply.model_copy(deep=True)
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 def reply(text: str) -> AIMessage:
@@ -156,10 +162,11 @@ def structured(value: pydantic.BaseModel, call_id: str | None = None) -> AIMessa
     return call(type(value).__name__, call_id, **value.model_dump(mode="json"))
 
 
-def scripted(*replies: str | BaseMessage) -> ScriptedChatModel:
-    """``scripted("hello")``, ``scripted(call("tool", x=1), "done")``: strings are answers."""
+def scripted(*replies: str | BaseMessage | Exception) -> ScriptedChatModel:
+    """``scripted("hello")``, ``scripted(call("tool", x=1), "done")``: strings are answers,
+    exceptions are raised by that call."""
     return ScriptedChatModel(
-        replies=[r if isinstance(r, BaseMessage) else reply(r) for r in replies]
+        replies=[reply(r) if isinstance(r, str) else r for r in replies]
     )
 
 

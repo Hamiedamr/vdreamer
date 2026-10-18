@@ -9,3 +9,4 @@ agents:
   t07-shop-assistant: vdreamer_tutorials.t07_multiple_tools.agent:agent
   t08-inventory: vdreamer_tutorials.t08_tool_contracts.agent:agent
   t09-support-desk: vdreamer_tutorials.t09_tool_selection.agent:agent
+  t10-resilient-tracker: vdreamer_tutorials.t10_failures_and_retries.agent:agent

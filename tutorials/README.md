@@ -17,6 +17,7 @@ Work through them in order; each builds on the ones before it.
 | 7 | [An agent with multiple tools](src/vdreamer_tutorials/t07_multiple_tools/README.md) | a shop assistant that selects, chains and batches four tools |
 | 8 | [Designing reusable tools with clear contracts](src/vdreamer_tutorials/t08_tool_contracts/README.md) | a tool factory over an injected inventory, idempotent reservations |
 | 9 | [Tool selection and execution control](src/vdreamer_tutorials/t09_tool_selection/README.md) | role-based tool visibility, execution-time refusal, call limits |
+| 10 | [Handling failures, retries and unexpected outputs](src/vdreamer_tutorials/t10_failures_and_retries/README.md) | tool and model retries, a fallback model, an output guard |
 
 ## Setup
 
