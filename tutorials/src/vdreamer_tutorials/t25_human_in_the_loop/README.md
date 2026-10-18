@@ -176,4 +176,4 @@ uv run pytest tests/tutorials/test_t25_human_in_the_loop.py -v
 2. Add `ttl_hours=1` and read the `expires_at` of the `interrupt.requested` event.
 3. Show the customer's original message in the payload so the approver has context.
 
-Next: Lesson 26 — Pausing for approval or additional input.
+Next: [Lesson 26 — Pausing for approval or additional input](../t26_asking_for_input/README.md).

@@ -27,3 +27,4 @@ agents:
   t23-support-desk: vdreamer_tutorials.t23_handoffs.agent:agent
   t24-guarded-supervisor: vdreamer_tutorials.t24_multi_agent_control.agent:agent
   t25-refund-approval: vdreamer_tutorials.t25_human_in_the_loop.agent:agent
+  t26-warranty-claims: vdreamer_tutorials.t26_asking_for_input.agent:agent
