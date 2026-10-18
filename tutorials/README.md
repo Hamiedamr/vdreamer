@@ -29,6 +29,7 @@ Work through them in order; each builds on the ones before it.
 | 19 | [Sequential and conditional workflows](src/vdreamer_tutorials/t19_workflows/README.md) | a headless, triggered ticket workflow with branches and checked facts |
 | 20 | [Planning and task decomposition](src/vdreamer_tutorials/t20_planning/README.md) | plan with a model, fan out with `Send`, join and synthesise |
 | 21 | [Specialised agents with clear responsibilities](src/vdreamer_tutorials/t21_specialists/README.md) | orders, products and policies specialists, each servable alone |
+| 22 | [A supervisor coordinating specialists](src/vdreamer_tutorials/t22_supervisor/README.md) | agents as tools, parallel delegation, nested events |
 
 ## Setup
 

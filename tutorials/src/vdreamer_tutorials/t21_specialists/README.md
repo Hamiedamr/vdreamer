@@ -164,4 +164,4 @@ uv run pytest tests/tutorials/test_t21_specialists.py -v
 2. Give the products specialist its own model alias (`products`) and declare it in both config files.
 3. Write a test asserting every specialist's responsibility mentions at least one of its tools' subjects.
 
-Next: Lesson 22 — A supervisor coordinating specialists.
+Next: [Lesson 22 — A supervisor coordinating specialists](../t22_supervisor/README.md).

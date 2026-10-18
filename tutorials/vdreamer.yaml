@@ -23,3 +23,4 @@ agents:
   t21-orders: vdreamer_tutorials.t21_specialists.agent:orders_agent
   t21-products: vdreamer_tutorials.t21_specialists.agent:products_agent
   t21-policies: vdreamer_tutorials.t21_specialists.agent:policies_agent
+  t22-support-supervisor: vdreamer_tutorials.t22_supervisor.agent:agent

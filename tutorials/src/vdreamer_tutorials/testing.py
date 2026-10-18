@@ -38,6 +38,7 @@ from vdreamer import AgentRunner, BaseAgent, EventEnvelope, InMemoryEventSink, V
 
 __all__ = [
     "AgentSession",
+    "RoutedChatModel",
     "RunResult",
     "ScriptExhausted",
     "ScriptedChatModel",
@@ -132,6 +133,38 @@ class ScriptedChatModel(BaseChatModel):
             raise scripted_reply
         message = scripted_reply.model_copy(deep=True)
         return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+class RoutedChatModel(BaseChatModel):
+    """One model alias shared by several agents, each with its own script.
+
+    A supervisor and its specialists (lessons 22–24) often use the same alias, and
+    specialists asked in parallel would consume one shared script in a random
+    order. Each call here goes to the script whose key appears in the call's
+    system prompt, so every agent's script stays in order.
+    """
+
+    routes: dict[str, ScriptedChatModel]
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted-routes"
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> RoutedChatModel:
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        system = messages[0].text if messages and messages[0].type == "system" else ""
+        for key, model in self.routes.items():
+            if key in system:
+                return model._generate(messages, stop, run_manager, **kwargs)
+        raise ScriptExhausted(f"no script routes the system prompt {system[:80]!r}")
 
 
 def reply(text: str) -> AIMessage:
