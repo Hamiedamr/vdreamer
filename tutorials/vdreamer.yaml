@@ -19,3 +19,4 @@ agents:
   t17-memory-desk: vdreamer_tutorials.t17_testing_memory.agent:agent
   t18-ticket-triage: vdreamer_tutorials.t18_structured_output.agent:agent
   t19-ticket-workflow: vdreamer_tutorials.t19_workflows.agent:agent
+  t20-planner: vdreamer_tutorials.t20_planning.agent:agent

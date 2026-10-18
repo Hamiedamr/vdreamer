@@ -207,4 +207,4 @@ uv run pytest tests/tutorials/test_t19_workflows.py -v
 3. Trigger with a `callback` URL on a host listed in `CALLBACK_ALLOWLIST`, and receive the HMAC-signed notification with a small HTTP server (see the root README's "Headless agents" section).
 4. Make the agent `Mode.BOTH` and start it from a chat with `vdreamer run t19-ticket-workflow --input …` — what changes for approvals (lesson 26)?
 
-Next: Lesson 20 — Planning and task decomposition.
+Next: [Lesson 20 — Planning and task decomposition](../t20_planning/README.md).
