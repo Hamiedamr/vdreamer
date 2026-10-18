@@ -57,7 +57,7 @@ def test_a_bad_environment_stops_vdreamer_at_startup(tmp_path: Path) -> None:
         "T12_LOG_LEVEL" in done.stderr
 
 
-# -- logs, hooks and events --------------------------------------------------------------------------
+# -- logs, hooks and events ------------------------------------------------------------------
 
 
 class Collect(logging.Handler):
