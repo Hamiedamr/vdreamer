@@ -169,4 +169,4 @@ uv run pytest tests/tutorials/test_t20_planning.py -v
 3. Emit progress per finished worker (`completed k of n`) — what must you store to know `n`?
 4. Bound the total cost: refuse plans whose tasks would call an external API more than twice.
 
-Next: Lesson 21 — Specialised agents with clear responsibilities.
+Next: [Lesson 21 — Specialised agents with clear responsibilities](../t21_specialists/README.md).

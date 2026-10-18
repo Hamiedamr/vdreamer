@@ -20,3 +20,6 @@ agents:
   t18-ticket-triage: vdreamer_tutorials.t18_structured_output.agent:agent
   t19-ticket-workflow: vdreamer_tutorials.t19_workflows.agent:agent
   t20-planner: vdreamer_tutorials.t20_planning.agent:agent
+  t21-orders: vdreamer_tutorials.t21_specialists.agent:orders_agent
+  t21-products: vdreamer_tutorials.t21_specialists.agent:products_agent
+  t21-policies: vdreamer_tutorials.t21_specialists.agent:policies_agent
